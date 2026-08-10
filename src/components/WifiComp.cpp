@@ -49,6 +49,7 @@ namespace
 
         if (WiFi.softAP(WifiConfig::AP_SSID, WifiConfig::AP_PASSWORD))
         {
+            WiFi.setSleep(false);
             Serial.print("Access point IP: ");
             Serial.println(WiFi.softAPIP());
             return true;

@@ -10,6 +10,9 @@
 #include "../components/BoardComp.h"
 #include "../components/CameraComp.h"
 #include "../components/WifiComp.h"
+#include "../services/BehaviorService.h"
+#include "../services/CommandService.h"
+#include "../services/VideoService.h"
 
 #include <Arduino.h>
 
@@ -31,13 +34,18 @@ void App::begin(){
   // 启动 Wi-Fi 连接或 SoftAP 回退
   WifiComp::enable();
 
-
+  // 启动行为、控制页面和独立端口的视频流服务
+  BehaviorService::enable();
+  VideoService::enable();
+  CommandService::enable();
 }
 
 // 主循环
 /** @brief 推进刺激和 IMU 非阻塞任务，并向 Arduino 调度器让出执行时间。 */
 void App::update()
 {
+  CommandService::update();
+
   // Give background Wi-Fi and camera tasks CPU time without blocking them.
   delay(1);
 }
