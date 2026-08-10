@@ -10,16 +10,12 @@
 
 void BoardComp::enable()
 {
-  pinMode(GPIOConfig::Chnl1, OUTPUT); // Left Backward
-  pinMode(GPIOConfig::Chnl2, OUTPUT); // Left Forward
-  pinMode(GPIOConfig::Chnl3, OUTPUT); // Right Forward
-  pinMode(GPIOConfig::Chnl4, OUTPUT); // Right Backward
+  // Keep every behavior channel electrically disconnected until commanded.
+  pinMode(GPIOConfig::Chnl1, INPUT);
+  pinMode(GPIOConfig::Chnl2, INPUT);
+  pinMode(GPIOConfig::Chnl3, INPUT);
+  pinMode(GPIOConfig::Chnl4, INPUT);
   pinMode(GPIOConfig::gpLed, OUTPUT); // Light
 
-  // Initialize every output to a safe inactive state.
-  digitalWrite(GPIOConfig::Chnl1, LOW);
-  digitalWrite(GPIOConfig::Chnl2, LOW);
-  digitalWrite(GPIOConfig::Chnl3, LOW);
-  digitalWrite(GPIOConfig::Chnl4, LOW);
   digitalWrite(GPIOConfig::gpLed, LOW);
 }

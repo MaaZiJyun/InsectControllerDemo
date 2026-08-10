@@ -48,23 +48,27 @@ void executeCommand(Command command)
 
   unsigned long startedAt = millis();
   bool reversePolarity = false;
+  uint16_t completedPhases = 0;
 
-  while (command != Command::Stop)
+  while (command != Command::Stop &&
+         completedPhases < ControllerConfig::PHASE_COUNT)
   {
     if (!BehaviorService::applyPhase(command, reversePolarity))
     {
       break;
     }
     reversePolarity = !reversePolarity;
+    ++completedPhases;
 
     Command replacement;
     if (xQueueReceive(commandQueue,
                       &replacement,
-                      pdMS_TO_TICKS(ControllerConfig::SIGNAL_HALF_PERIOD_MS)) == pdTRUE)
+                      pdMS_TO_TICKS(ControllerConfig::PHASE_DURATION_MS)) == pdTRUE)
     {
       command = replacement;
       startedAt = millis();
       reversePolarity = false;
+      completedPhases = 0;
       continue;
     }
 

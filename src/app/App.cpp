@@ -22,10 +22,10 @@ void App::begin(){
 
   // Arduino Serial 调试输出
   Serial.begin(115200);
-  Serial.setDebugOutput(true);
+  Serial.setDebugOutput(false);
   Serial.println();
 
-  // 先将所有电极和指示灯输出置于安全的 LOW 状态
+  // 先将所有行为通道置于安全的 INPUT 高阻状态
   BoardComp::enable();
 
   // 初始化摄像头；失败不会阻止网络服务启动

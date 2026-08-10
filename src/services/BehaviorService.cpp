@@ -18,103 +18,66 @@ constexpr int CHANNEL_PINS[CHANNEL_COUNT] = {
     GPIOConfig::Chnl3,
     GPIOConfig::Chnl4};
 
-bool pwmAttached[CHANNEL_COUNT] = {false, false, false, false};
 Command configuredCommand = Command::Stop;
 
-struct ChannelPair
+struct DrivePattern
 {
-  uint8_t first;
-  uint8_t second;
+  uint8_t primary;
+  uint8_t secondary;
   bool valid;
 };
 
-ChannelPair pairFor(Command command)
+DrivePattern patternFor(Command command)
 {
   switch (command)
   {
   case Command::Forward:
-    return {0, 3, true}; // Channels 1 and 4
+    return {0, 3, true}; // Ch1 <-> Ch4; Ch2/Ch3 high impedance
   case Command::Back:
-    return {0, 3, true}; // Channels 1 and 4
+    return {0, 3, true}; // Ch1 <-> Ch4; Ch2/Ch3 high impedance
   case Command::Left:
-    return {0, 2, true}; // Channels 1 and 3, 
+    return {0, 2, true}; // Ch1 <-> Ch3; Ch2/Ch4 high impedance
   case Command::Right:
-    return {0, 1, true}; // Channels 1 and 2
+    return {0, 1, true}; // Ch1 <-> Ch2; Ch3/Ch4 high impedance
   case Command::Stop:
   default:
     return {0, 0, false};
   }
 }
 
-void detachPwm(uint8_t index)
+void setHighImpedance(uint8_t index)
 {
-  if (pwmAttached[index])
-  {
-    ledcWrite(CHANNEL_PINS[index], ControllerConfig::SIGNAL_LOW);
-    ledcDetach(CHANNEL_PINS[index]);
-    pwmAttached[index] = false;
-  }
+  pinMode(CHANNEL_PINS[index], INPUT);
 }
 
-void setLowOutput(uint8_t index)
+void setActiveOutput(uint8_t index)
 {
-  detachPwm(index);
   pinMode(CHANNEL_PINS[index], OUTPUT);
   digitalWrite(CHANNEL_PINS[index], LOW);
 }
 
-void setHighImpedance(uint8_t index)
+void writeSignal(uint8_t index, uint16_t signalCode)
 {
-  detachPwm(index);
-  pinMode(CHANNEL_PINS[index], INPUT);
-}
-
-bool attachPwm(uint8_t index)
-{
-  if (pwmAttached[index])
-  {
-    return true;
-  }
-
-  pwmAttached[index] = ledcAttachChannel(
-      CHANNEL_PINS[index],
-      ControllerConfig::PWM_FREQUENCY_HZ,
-      ControllerConfig::PWM_RESOLUTION_BITS,
-      ControllerConfig::PWM_CHANNELS[index]);
-
-  if (!pwmAttached[index])
-  {
-    Serial.printf("Failed to attach PWM to behavior channel %u\n", index + 1);
-  }
-  return pwmAttached[index];
+  digitalWrite(CHANNEL_PINS[index],
+               signalCode == ControllerConfig::SIGNAL_LOW ? LOW : HIGH);
 }
 
 bool configureFor(Command command)
 {
-  const ChannelPair pair = pairFor(command);
-  if (!pair.valid)
+  const DrivePattern pattern = patternFor(command);
+  if (!pattern.valid)
   {
     return false;
   }
 
-  // Remove the previous drive state before selecting a new electrode pair.
+  // Disconnect every channel before selecting a new electrode pattern.
   for (uint8_t index = 0; index < CHANNEL_COUNT; ++index)
   {
-    setLowOutput(index);
+    setHighImpedance(index);
   }
 
-  for (uint8_t index = 0; index < CHANNEL_COUNT; ++index)
-  {
-    if (index != pair.first && index != pair.second)
-    {
-      setHighImpedance(index);
-    }
-  }
-
-  if (!attachPwm(pair.first) || !attachPwm(pair.second))
-  {
-    return false;
-  }
+  setActiveOutput(pattern.primary);
+  setActiveOutput(pattern.secondary);
 
   configuredCommand = command;
   return true;
@@ -130,7 +93,7 @@ void BehaviorService::stop()
 {
   for (uint8_t index = 0; index < CHANNEL_COUNT; ++index)
   {
-    setLowOutput(index);
+    setHighImpedance(index);
   }
   configuredCommand = Command::Stop;
 }
@@ -149,15 +112,16 @@ bool BehaviorService::applyPhase(Command command, bool reversePolarity)
     return false;
   }
 
-  const ChannelPair pair = pairFor(command);
-  const uint16_t firstValue = reversePolarity
-                                  ? ControllerConfig::SIGNAL_LOW
-                                  : ControllerConfig::SIGNAL_HIGH;
-  const uint16_t secondValue = reversePolarity
-                                   ? ControllerConfig::SIGNAL_HIGH
-                                   : ControllerConfig::SIGNAL_LOW;
+  const DrivePattern pattern = patternFor(command);
+  // Phase 1: primary=0, secondary=512. Phase 2 reverses the polarity.
+  const uint16_t primaryValue = reversePolarity
+                                    ? ControllerConfig::SIGNAL_HIGH
+                                    : ControllerConfig::SIGNAL_LOW;
+  const uint16_t secondaryValue = reversePolarity
+                                      ? ControllerConfig::SIGNAL_LOW
+                                      : ControllerConfig::SIGNAL_HIGH;
 
-  ledcWrite(CHANNEL_PINS[pair.first], firstValue);
-  ledcWrite(CHANNEL_PINS[pair.second], secondValue);
+  writeSignal(pattern.primary, primaryValue);
+  writeSignal(pattern.secondary, secondaryValue);
   return true;
 }

@@ -6,6 +6,6 @@
 
 namespace BoardComp
 {
-/** @brief 配置所有板级输出，并将其初始化为 LOW。 */
+/** @brief 将行为通道初始化为 INPUT 高阻，并关闭指示灯。 */
 void enable();
 }
