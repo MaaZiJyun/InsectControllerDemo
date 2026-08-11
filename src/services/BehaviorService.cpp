@@ -11,77 +11,77 @@
 
 namespace
 {
-constexpr uint8_t CHANNEL_COUNT = 4;
-constexpr int CHANNEL_PINS[CHANNEL_COUNT] = {
-    GPIOConfig::Chnl1,
-    GPIOConfig::Chnl2,
-    GPIOConfig::Chnl3,
-    GPIOConfig::Chnl4};
+  constexpr uint8_t CHANNEL_COUNT = 4;
+  constexpr int CHANNEL_PINS[CHANNEL_COUNT] = {
+      GPIOConfig::Chnl1,
+      GPIOConfig::Chnl2,
+      GPIOConfig::Chnl3,
+      GPIOConfig::Chnl4};
 
-Command configuredCommand = Command::Stop;
+  Command configuredCommand = Command::Stop;
 
-struct DrivePattern
-{
-  uint8_t primary;
-  uint8_t secondary;
-  bool valid;
-};
-
-DrivePattern patternFor(Command command)
-{
-  switch (command)
+  struct DrivePattern
   {
-  case Command::Forward:
-    return {0, 3, true}; // Ch1 <-> Ch4; Ch2/Ch3 high impedance
-  case Command::Back:
-    return {0, 3, true}; // Ch1 <-> Ch4; Ch2/Ch3 high impedance
-  case Command::Left:
-    return {0, 2, true}; // Ch1 <-> Ch3; Ch2/Ch4 high impedance
-  case Command::Right:
-    return {0, 1, true}; // Ch1 <-> Ch2; Ch3/Ch4 high impedance
-  case Command::Stop:
-  default:
-    return {0, 0, false};
-  }
-}
+    uint8_t primary;
+    uint8_t secondary;
+    bool valid;
+  };
 
-void setHighImpedance(uint8_t index)
-{
-  pinMode(CHANNEL_PINS[index], INPUT);
-}
-
-void setActiveOutput(uint8_t index)
-{
-  pinMode(CHANNEL_PINS[index], OUTPUT);
-  digitalWrite(CHANNEL_PINS[index], LOW);
-}
-
-void writeSignal(uint8_t index, uint16_t signalCode)
-{
-  digitalWrite(CHANNEL_PINS[index],
-               signalCode == ControllerConfig::SIGNAL_LOW ? LOW : HIGH);
-}
-
-bool configureFor(Command command)
-{
-  const DrivePattern pattern = patternFor(command);
-  if (!pattern.valid)
+  DrivePattern patternFor(Command command)
   {
-    return false;
+    switch (command)
+    {
+    case Command::Forward:
+      return {0, 3, true}; // Ch1 <-> Ch4; Ch2/Ch3 high impedance
+    case Command::Back:
+      return {0, 3, true}; // Ch1 <-> Ch4; Ch2/Ch3 high impedance
+    case Command::Left:
+      return {0, 2, true}; // Ch1 <-> Ch3; Ch2/Ch4 high impedance
+    case Command::Right:
+      return {0, 1, true}; // Ch1 <-> Ch2; Ch3/Ch4 high impedance
+    case Command::Stop:
+    default:
+      return {0, 0, false};
+    }
   }
 
-  // Disconnect every channel before selecting a new electrode pattern.
-  for (uint8_t index = 0; index < CHANNEL_COUNT; ++index)
+  void setHighImpedance(uint8_t index)
   {
-    setHighImpedance(index);
+    pinMode(CHANNEL_PINS[index], INPUT);
   }
 
-  setActiveOutput(pattern.primary);
-  setActiveOutput(pattern.secondary);
+  void setActiveOutput(uint8_t index)
+  {
+    pinMode(CHANNEL_PINS[index], OUTPUT);
+    digitalWrite(CHANNEL_PINS[index], LOW);
+  }
 
-  configuredCommand = command;
-  return true;
-}
+  void writeSignal(uint8_t index, uint16_t signalCode)
+  {
+    digitalWrite(CHANNEL_PINS[index],
+                 signalCode == ControllerConfig::SIGNAL_LOW ? LOW : HIGH);
+  }
+
+  bool configureFor(Command command)
+  {
+    const DrivePattern pattern = patternFor(command);
+    if (!pattern.valid)
+    {
+      return false;
+    }
+
+    // Disconnect every channel before selecting a new electrode pattern.
+    for (uint8_t index = 0; index < CHANNEL_COUNT; ++index)
+    {
+      setHighImpedance(index);
+    }
+
+    setActiveOutput(pattern.primary);
+    setActiveOutput(pattern.secondary);
+
+    configuredCommand = command;
+    return true;
+  }
 } // namespace
 
 void BehaviorService::enable()
