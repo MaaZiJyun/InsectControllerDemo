@@ -57,13 +57,13 @@ updateClock();setInterval(updateClock,1000);
 video.addEventListener('load',()=>setCameraState('online','Camera Online'));video.addEventListener('error',()=>setCameraState('offline','Camera Connection Failed'));
 const send=name=>fetch('/command?name='+encodeURIComponent(name),{method:'POST',cache:'no-store'}).then(r=>{if(!r.ok)throw Error(r.status)}).catch(()=>setCameraState('offline','Command Connection Failed'));
 fetch('/config',{cache:'no-store'}).then(r=>r.json()).then(c=>{video.src='http://'+location.hostname+':'+c.videoPort+'/stream'}).catch(()=>setCameraState('offline','Config Read Failed'));
-let repeat=null,active=null;
-function release(sendStop=true){if(repeat){clearInterval(repeat);repeat=null}if(active){active.classList.remove('active');active=null}if(sendStop)send('stop')}
+let active=null;
+function clearActive(){if(active){active.classList.remove('active');active=null}}
 document.querySelectorAll('button[data-command]').forEach(button=>{
-  button.addEventListener('pointerdown',event=>{event.preventDefault();release(false);const cmd=button.dataset.command;active=button;button.classList.add('active');if(cmd==='stop'){send('stop');return}send(cmd);repeat=setInterval(()=>send(cmd),250)});
-  button.addEventListener('pointerup',release);button.addEventListener('pointercancel',release);button.addEventListener('pointerleave',event=>{if(event.buttons)release()});
+  button.addEventListener('pointerdown',event=>{event.preventDefault();clearActive();active=button;button.classList.add('active');send(button.dataset.command)});
+  button.addEventListener('pointerup',clearActive);button.addEventListener('pointercancel',clearActive);button.addEventListener('pointerleave',clearActive);
 });
-window.addEventListener('blur',release);
+window.addEventListener('blur',clearActive);
 </script>
 </body>
 </html>
