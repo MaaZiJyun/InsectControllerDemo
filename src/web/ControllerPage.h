@@ -79,7 +79,6 @@ namespace ControllerPage
             align-items: flex-start;
             justify-content: space-between;
             gap: 16px;
-            text-shadow: 0 1px 5px rgba(0, 0, 0, .8);
         }
 
         .camera-state {
@@ -162,8 +161,7 @@ namespace ControllerPage
             padding: 20px;
             border: 1px solid rgba(255, 255, 255, .23);
             border-radius: 22px;
-            background: rgba(24, 27, 31, .92);
-            box-shadow: 0 20px 60px rgba(0, 0, 0, .5)
+            background: var(--glass);
         }
 
         .settings-title {
@@ -242,8 +240,6 @@ namespace ControllerPage
             color: #fff;
             font-size: 1.45rem;
             font-weight: 750;
-            text-shadow: 0 1px 3px rgba(0, 0, 0, .5);
-            box-shadow: 0 4px 14px rgba(0, 0, 0, .18);
             touch-action: none;
             user-select: none;
             cursor: pointer;
