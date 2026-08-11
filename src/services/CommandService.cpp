@@ -10,6 +10,7 @@
 
 #include <Arduino.h>
 #include <WebServer.h>
+#include <math.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/queue.h>
 #include <freertos/task.h>
@@ -38,9 +39,57 @@ bool parseCommand(const String &name, Command &command)
   return true;
 }
 
-void executeCommand(Command command)
+bool parseCycleCount(uint16_t &cycleCount)
 {
-  if (command == Command::Stop)
+  if (!controlServer.hasArg("cycleCount"))
+  {
+    cycleCount = ControllerConfig::DEFAULT_CYCLE_COUNT;
+    return true;
+  }
+
+  const String value = controlServer.arg("cycleCount");
+  char *end = nullptr;
+  const unsigned long parsed = strtoul(value.c_str(), &end, 10);
+  if (end == value.c_str() || *end != '\0' ||
+      parsed < ControllerConfig::MIN_CYCLE_COUNT ||
+      parsed > ControllerConfig::MAX_CYCLE_COUNT)
+  {
+    return false;
+  }
+
+  cycleCount = static_cast<uint16_t>(parsed);
+  return true;
+}
+
+bool parsePhaseDuration(uint16_t &phaseDurationMs)
+{
+  if (!controlServer.hasArg("frequency"))
+  {
+    phaseDurationMs = ControllerConfig::DEFAULT_PHASE_DURATION_MS;
+    return true;
+  }
+
+  const String value = controlServer.arg("frequency");
+  char *end = nullptr;
+  const float frequency = strtof(value.c_str(), &end);
+  if (end == value.c_str() || *end != '\0' || !isfinite(frequency) ||
+      frequency < ControllerConfig::MIN_FREQUENCY_HZ ||
+      frequency > ControllerConfig::MAX_FREQUENCY_HZ)
+  {
+    return false;
+  }
+
+  phaseDurationMs = static_cast<uint16_t>(lroundf(500.0F / frequency));
+  if (phaseDurationMs == 0)
+  {
+    phaseDurationMs = 1;
+  }
+  return true;
+}
+
+void executeCommand(CommandRequest request)
+{
+  if (request.command == Command::Stop)
   {
     BehaviorService::stop();
     return;
@@ -48,27 +97,28 @@ void executeCommand(Command command)
 
   unsigned long startedAt = millis();
   bool reversePolarity = false;
-  uint16_t completedPhases = 0;
+  uint32_t completedPhases = 0;
+  uint32_t phaseCount = static_cast<uint32_t>(request.cycleCount) * 2U;
 
-  while (command != Command::Stop &&
-         completedPhases < ControllerConfig::PHASE_COUNT)
+  while (request.command != Command::Stop && completedPhases < phaseCount)
   {
-    if (!BehaviorService::applyPhase(command, reversePolarity))
+    if (!BehaviorService::applyPhase(request.command, reversePolarity))
     {
       break;
     }
     reversePolarity = !reversePolarity;
     ++completedPhases;
 
-    Command replacement;
+    CommandRequest replacement;
     if (xQueueReceive(commandQueue,
                       &replacement,
-                      pdMS_TO_TICKS(ControllerConfig::PHASE_DURATION_MS)) == pdTRUE)
+                      pdMS_TO_TICKS(request.phaseDurationMs)) == pdTRUE)
     {
-      command = replacement;
+      request = replacement;
       startedAt = millis();
       reversePolarity = false;
       completedPhases = 0;
+      phaseCount = static_cast<uint32_t>(request.cycleCount) * 2U;
       continue;
     }
 
@@ -83,12 +133,12 @@ void executeCommand(Command command)
 
 void commandTask(void *)
 {
-  Command command;
+  CommandRequest request;
   for (;;)
   {
-    if (xQueueReceive(commandQueue, &command, portMAX_DELAY) == pdTRUE)
+    if (xQueueReceive(commandQueue, &request, portMAX_DELAY) == pdTRUE)
     {
-      executeCommand(command);
+      executeCommand(request);
     }
   }
 }
@@ -103,14 +153,39 @@ void handleCommandRequest()
     return;
   }
 
-  if (!CommandService::submit(command))
+  uint16_t cycleCount = ControllerConfig::DEFAULT_CYCLE_COUNT;
+  uint16_t phaseDurationMs = ControllerConfig::DEFAULT_PHASE_DURATION_MS;
+  if (command != Command::Stop &&
+      (!parseCycleCount(cycleCount) || !parsePhaseDuration(phaseDurationMs)))
+  {
+    controlServer.send(400, "application/json", "{\"ok\":false,\"error\":\"invalid waveform settings\"}");
+    return;
+  }
+
+  const uint32_t durationMs =
+      static_cast<uint32_t>(cycleCount) * 2U * phaseDurationMs;
+  if (command != Command::Stop &&
+      durationMs > ControllerConfig::COMMAND_TIMEOUT_MS)
+  {
+    controlServer.send(400, "application/json", "{\"ok\":false,\"error\":\"waveform exceeds 500 ms safety timeout\"}");
+    return;
+  }
+
+  const CommandRequest request = {command, cycleCount, phaseDurationMs};
+  if (!CommandService::submit(request))
   {
     controlServer.send(503, "application/json", "{\"ok\":false,\"error\":\"command service unavailable\"}");
     return;
   }
 
   controlServer.sendHeader("Cache-Control", "no-store");
-  controlServer.send(200, "application/json", "{\"ok\":true}");
+  char response[96];
+  snprintf(response,
+           sizeof(response),
+           "{\"ok\":true,\"cycleCount\":%u,\"phaseDurationMs\":%u}",
+           cycleCount,
+           phaseDurationMs);
+  controlServer.send(200, "application/json", response);
 }
 } // namespace
 
@@ -122,7 +197,7 @@ bool CommandService::enable()
   }
 
   BehaviorService::enable();
-  commandQueue = xQueueCreate(1, sizeof(Command));
+  commandQueue = xQueueCreate(1, sizeof(CommandRequest));
   if (commandQueue == nullptr)
   {
     Serial.println("Failed to create command queue");
@@ -149,12 +224,19 @@ bool CommandService::enable()
                    });
   controlServer.on("/config", HTTP_GET, []()
                    {
-                     char response[80];
+                     char response[240];
                      snprintf(response,
                               sizeof(response),
-                              "{\"controlPort\":%u,\"videoPort\":%u}",
+                              "{\"controlPort\":%u,\"videoPort\":%u,\"cycleCount\":%u,\"frequency\":%.1f,\"minCycleCount\":%u,\"maxCycleCount\":%u,\"minFrequency\":%.1f,\"maxFrequency\":%.1f,\"maxDurationMs\":%lu}",
                               ControllerConfig::CONTROL_PORT,
-                              ControllerConfig::VIDEO_PORT);
+                              ControllerConfig::VIDEO_PORT,
+                              ControllerConfig::DEFAULT_CYCLE_COUNT,
+                              ControllerConfig::DEFAULT_FREQUENCY_HZ,
+                              ControllerConfig::MIN_CYCLE_COUNT,
+                              ControllerConfig::MAX_CYCLE_COUNT,
+                              ControllerConfig::MIN_FREQUENCY_HZ,
+                              ControllerConfig::MAX_FREQUENCY_HZ,
+                              static_cast<unsigned long>(ControllerConfig::COMMAND_TIMEOUT_MS));
                      controlServer.sendHeader("Cache-Control", "no-store");
                      controlServer.send(200, "application/json", response);
                    });
@@ -176,8 +258,8 @@ void CommandService::update()
   }
 }
 
-bool CommandService::submit(Command command)
+bool CommandService::submit(const CommandRequest &request)
 {
   return commandQueue != nullptr &&
-         xQueueOverwrite(commandQueue, &command) == pdPASS;
+         xQueueOverwrite(commandQueue, &request) == pdPASS;
 }

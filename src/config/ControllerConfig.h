@@ -13,14 +13,14 @@ inline constexpr uint16_t VIDEO_PORT = 81;
 
 inline constexpr uint32_t COMMAND_TIMEOUT_MS = 500;
 
-/// 单个相位的持续时间，单位为毫秒。
-inline constexpr uint16_t PHASE_DURATION_MS = 10;
-/// 每次刺激命令执行的完整双相周期数。
-inline constexpr uint8_t CYCLE_COUNT = 20;
-inline constexpr uint16_t PHASE_COUNT = CYCLE_COUNT * 2;
+inline constexpr uint16_t DEFAULT_PHASE_DURATION_MS = 10;
+inline constexpr uint16_t DEFAULT_CYCLE_COUNT = 20;
+inline constexpr float DEFAULT_FREQUENCY_HZ = 50.0F;
 
-static_assert(PHASE_DURATION_MS * PHASE_COUNT <= COMMAND_TIMEOUT_MS,
-              "Stimulus cycle sequence must fit inside the command timeout");
+inline constexpr uint16_t MIN_CYCLE_COUNT = 1;
+inline constexpr uint16_t MAX_CYCLE_COUNT = 250;
+inline constexpr float MIN_FREQUENCY_HZ = 1.0F;
+inline constexpr float MAX_FREQUENCY_HZ = 500.0F;
 
 // Logical signal codes. SIGNAL_HIGH maps to a stable 3.3 V GPIO HIGH,
 // not to a PWM duty value.

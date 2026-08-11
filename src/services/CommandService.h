@@ -14,6 +14,6 @@ bool enable();
 /** @brief 在 Arduino loop 中处理控制页面 HTTP 请求。 */
 void update();
 
-/** @brief 覆盖当前缓存命令。 */
-bool submit(Command command);
+/** @brief 用包含波形参数的新命令覆盖当前缓存。 */
+bool submit(const CommandRequest &request);
 }
