@@ -15,5 +15,5 @@ void enable();
 void stop();
 
 /** @brief 输出指定行为的一个极性相位。 */
-bool applyPhase(Command command, bool reversePolarity);
+bool applyPhase(Command command, const uint8_t channelPins[4], bool reversePolarity);
 }

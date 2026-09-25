@@ -157,7 +157,9 @@ namespace ControllerPage
             display: grid;
             grid-template-columns: 1fr 1fr;
             gap: 14px 16px;
-            width: min(360px, 100%);
+            width: min(440px, 100%);
+            max-height: calc(100dvh - 40px);
+            overflow-y: auto;
             padding: 20px;
             border: 1px solid rgba(255, 255, 255, .23);
             border-radius: 22px;
@@ -191,7 +193,8 @@ namespace ControllerPage
             font-size: .78rem
         }
 
-        .setting input {
+        .setting input,
+        .pin-grid select {
             width: 100%;
             padding: 9px;
             border: 1px solid rgba(255, 255, 255, .32);
@@ -203,8 +206,54 @@ namespace ControllerPage
             outline: none
         }
 
-        .setting input:focus {
+        .setting input:focus,
+        .pin-grid select:focus {
             border-color: rgba(255, 255, 255, .8)
+        }
+
+        .pin-settings {
+            grid-column: 1/-1;
+            display: grid;
+            gap: 9px
+        }
+
+        .pin-settings h3 {
+            margin: 2px 0 0;
+            font-size: .86rem
+        }
+
+        .pin-grid {
+            display: grid;
+            grid-template-columns: minmax(62px, .8fr) minmax(90px, 1.4fr) minmax(64px, 1fr);
+            align-items: center;
+            gap: 7px;
+            font-size: .72rem;
+            text-align: center
+        }
+
+        .pin-grid .pin-name,
+        .pin-grid .pin-role {
+            text-align: left;
+            font-weight: 650
+        }
+
+        .pin-grid .pin-role {
+            font-weight: 450;
+            opacity: .78
+        }
+
+        .pin-grid select {
+            padding: 7px 4px;
+            text-align: center
+        }
+
+        .pin-grid select.invalid {
+            border-color: #ff8b87
+        }
+
+        .pin-help {
+            font-size: .66rem;
+            opacity: .74
         }
 
         .wave-info {
@@ -338,6 +387,11 @@ namespace ControllerPage
                 </div>
                 <label class="setting">Cycles<input id="cycleCount" type="number" inputmode="numeric"></label>
                 <label class="setting">Frequency (Hz)<input id="frequency" type="number" inputmode="decimal"></label>
+                <div class="pin-settings">
+                    <h3>GPIO mapping</h3>
+                    <div id="pinGrid" class="pin-grid"></div>
+                    <div class="pin-help">Forward: Chnl1 + Chnl4 · Right: Chnl1 + Chnl2 · Left: Chnl1 + Chnl3 · Stop: high impedance</div>
+                </div>
                 <div id="waveInfo" class="wave-info">Loading settings…</div>
             </div>
         </section>
@@ -350,7 +404,41 @@ namespace ControllerPage
             frequencyInput = document.getElementById('frequency'),
             waveInfo = document.getElementById('waveInfo');
         const settingsModal = document.getElementById('settingsModal');
+        const pinGrid = document.getElementById('pinGrid');
+        const pinVariables = [
+            ['Chnl1', 'Ground'],
+            ['Chnl2', 'Right'],
+            ['Chnl3', 'Left'],
+            ['Chnl4', 'Forward']
+        ];
+        const pinStorageKey = 'insect-controller-channel-pins-v1';
         let maxDurationMs = 500;
+
+        ['Variable', 'Role', 'Output pin'].forEach(label => {
+            const heading = document.createElement('span');
+            heading.textContent = label;
+            pinGrid.appendChild(heading)
+        });
+        pinVariables.forEach(([name, role], channel) => {
+            const variable = document.createElement('span');
+            variable.className = 'pin-name';
+            variable.textContent = name;
+            pinGrid.appendChild(variable);
+            const description = document.createElement('span');
+            description.className = 'pin-role';
+            description.textContent = role;
+            pinGrid.appendChild(description);
+            const select = document.createElement('select');
+            select.dataset.channel = channel;
+            select.setAttribute('aria-label', name + ' ' + role);
+            for (let pin = 0; pin <= 10; pin++) {
+                const option = document.createElement('option');
+                option.value = pin;
+                option.textContent = 'D' + pin;
+                select.appendChild(option)
+            }
+            pinGrid.appendChild(select)
+        });
 
         function setCameraState(state, text) {
             cameraDot.className = 'dot ' + state;
@@ -388,8 +476,48 @@ namespace ControllerPage
                 valid
             }
         }
-        cycleInput.addEventListener('input', waveform);
-        frequencyInput.addEventListener('input', waveform);
+        function pinValues() {
+            return Array.from(pinGrid.querySelectorAll('select[data-channel]')).map(select => Number(select.value))
+        }
+
+        function updateSettingsInfo() {
+            const selects = Array.from(pinGrid.querySelectorAll('select[data-channel]'));
+            const pins = pinValues();
+            const valid = pins.length === 4 && new Set(pins).size === 4 && pins.every(pin => Number.isInteger(pin) && pin >= 0 && pin <= 10);
+            selects.forEach(select => select.classList.toggle('invalid', !valid));
+            if (!valid) {
+                waveInfo.textContent = 'Invalid: Chnl1–Chnl4 must use four different pins';
+                waveInfo.classList.add('invalid');
+                return false
+            }
+            return waveform().valid
+        }
+
+        function savePinMapping() {
+            try {
+                localStorage.setItem(pinStorageKey, JSON.stringify(pinValues()))
+            } catch (_) {}
+        }
+
+        function loadPinMapping(defaultPins) {
+            let saved = [];
+            try {
+                saved = JSON.parse(localStorage.getItem(pinStorageKey) || '[]')
+            } catch (_) {}
+            const pins = Array.isArray(saved) && saved.length === 4 ? saved : defaultPins;
+            pinGrid.querySelectorAll('select[data-channel]').forEach((select, channel) => {
+                const pin = Number(pins[channel]);
+                select.value = Number.isInteger(pin) && pin >= 0 && pin <= 10 ? pin : defaultPins[channel]
+            });
+            updateSettingsInfo()
+        }
+
+        cycleInput.addEventListener('input', updateSettingsInfo);
+        frequencyInput.addEventListener('input', updateSettingsInfo);
+        pinGrid.addEventListener('change', () => {
+            savePinMapping();
+            updateSettingsInfo()
+        });
 
         function openSettings() {
             settingsModal.hidden = false;
@@ -407,6 +535,12 @@ namespace ControllerPage
         });
         const send = name => {
             let url = '/command?name=' + encodeURIComponent(name);
+            const pins = pinValues();
+            if (pins.length !== 4 || new Set(pins).size !== 4) {
+                updateSettingsInfo();
+                return Promise.resolve()
+            }
+            pins.forEach((pin, index) => url += '&chnl' + (index + 1) + '=' + pin);
             if (name !== 'stop') {
                 const w = waveform();
                 if (!w.valid) return Promise.resolve();
@@ -434,7 +568,7 @@ namespace ControllerPage
             frequencyInput.step = '0.1';
             frequencyInput.value = c.frequency;
             maxDurationMs = c.maxDurationMs;
-            waveform()
+            loadPinMapping(c.defaultPins || [7, 8, 9, 10])
         }).catch(() => setCameraState('offline', 'Config Read Failed'));
         let active = null;
 

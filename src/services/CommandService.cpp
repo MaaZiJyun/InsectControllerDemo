@@ -6,6 +6,7 @@
 
 #include "BehaviorService.h"
 #include "../config/ControllerConfig.h"
+#include "../config/GpioConfig.h"
 #include "../web/ControllerPage.h"
 
 #include <Arduino.h>
@@ -87,6 +88,51 @@ bool parsePhaseDuration(uint16_t &phaseDurationMs)
   return true;
 }
 
+bool parseChannelPins(uint8_t channelPins[GPIOConfig::CHANNEL_COUNT])
+{
+  static const char *ARG_NAMES[GPIOConfig::CHANNEL_COUNT] = {
+      "chnl1", "chnl2", "chnl3", "chnl4"};
+
+  bool hasAnyPin = false;
+  for (uint8_t index = 0; index < GPIOConfig::CHANNEL_COUNT; ++index)
+  {
+    hasAnyPin = hasAnyPin || controlServer.hasArg(ARG_NAMES[index]);
+  }
+
+  for (uint8_t index = 0; index < GPIOConfig::CHANNEL_COUNT; ++index)
+  {
+    if (!hasAnyPin)
+    {
+      channelPins[index] = static_cast<uint8_t>(GPIOConfig::DEFAULT_CHANNEL_PINS[index]);
+      continue;
+    }
+    if (!controlServer.hasArg(ARG_NAMES[index]))
+    {
+      return false;
+    }
+
+    const String value = controlServer.arg(ARG_NAMES[index]);
+    char *end = nullptr;
+    const unsigned long pinIndex = strtoul(value.c_str(), &end, 10);
+    if (end == value.c_str() || *end != '\0' || pinIndex >= GPIOConfig::PIN_OPTION_COUNT)
+    {
+      return false;
+    }
+
+    const uint8_t pin = static_cast<uint8_t>(
+        GPIOConfig::pinForIndex(static_cast<uint8_t>(pinIndex)));
+    for (uint8_t previous = 0; previous < index; ++previous)
+    {
+      if (channelPins[previous] == pin)
+      {
+        return false;
+      }
+    }
+    channelPins[index] = pin;
+  }
+  return true;
+}
+
 void executeCommand(CommandRequest request)
 {
   if (request.command == Command::Stop)
@@ -102,7 +148,9 @@ void executeCommand(CommandRequest request)
 
   while (request.command != Command::Stop && completedPhases < phaseCount)
   {
-    if (!BehaviorService::applyPhase(request.command, reversePolarity))
+    if (!BehaviorService::applyPhase(request.command,
+                                     request.channelPins,
+                                     reversePolarity))
     {
       break;
     }
@@ -155,6 +203,13 @@ void handleCommandRequest()
 
   uint16_t cycleCount = ControllerConfig::DEFAULT_CYCLE_COUNT;
   uint16_t phaseDurationMs = ControllerConfig::DEFAULT_PHASE_DURATION_MS;
+  uint8_t channelPins[GPIOConfig::CHANNEL_COUNT] = {};
+  if (!parseChannelPins(channelPins))
+  {
+    controlServer.send(400, "application/json", "{\"ok\":false,\"error\":\"invalid or duplicate channel pins\"}");
+    return;
+  }
+
   if (command != Command::Stop &&
       (!parseCycleCount(cycleCount) || !parsePhaseDuration(phaseDurationMs)))
   {
@@ -171,7 +226,11 @@ void handleCommandRequest()
     return;
   }
 
-  const CommandRequest request = {command, cycleCount, phaseDurationMs};
+  CommandRequest request = {command, cycleCount, phaseDurationMs, {}};
+  for (uint8_t index = 0; index < GPIOConfig::CHANNEL_COUNT; ++index)
+  {
+    request.channelPins[index] = channelPins[index];
+  }
   if (!CommandService::submit(request))
   {
     controlServer.send(503, "application/json", "{\"ok\":false,\"error\":\"command service unavailable\"}");
@@ -224,10 +283,10 @@ bool CommandService::enable()
                    });
   controlServer.on("/config", HTTP_GET, []()
                    {
-                     char response[240];
+                     char response[320];
                      snprintf(response,
                               sizeof(response),
-                              "{\"controlPort\":%u,\"videoPort\":%u,\"cycleCount\":%u,\"frequency\":%.1f,\"minCycleCount\":%u,\"maxCycleCount\":%u,\"minFrequency\":%.1f,\"maxFrequency\":%.1f,\"maxDurationMs\":%lu}",
+                              "{\"controlPort\":%u,\"videoPort\":%u,\"cycleCount\":%u,\"frequency\":%.1f,\"minCycleCount\":%u,\"maxCycleCount\":%u,\"minFrequency\":%.1f,\"maxFrequency\":%.1f,\"maxDurationMs\":%lu,\"defaultPins\":[%u,%u,%u,%u]}",
                               ControllerConfig::CONTROL_PORT,
                               ControllerConfig::VIDEO_PORT,
                               ControllerConfig::DEFAULT_CYCLE_COUNT,
@@ -236,7 +295,11 @@ bool CommandService::enable()
                               ControllerConfig::MAX_CYCLE_COUNT,
                               ControllerConfig::MIN_FREQUENCY_HZ,
                               ControllerConfig::MAX_FREQUENCY_HZ,
-                              static_cast<unsigned long>(ControllerConfig::COMMAND_TIMEOUT_MS));
+                              static_cast<unsigned long>(ControllerConfig::COMMAND_TIMEOUT_MS),
+                              GPIOConfig::DEFAULT_CHANNEL_INDICES[0],
+                              GPIOConfig::DEFAULT_CHANNEL_INDICES[1],
+                              GPIOConfig::DEFAULT_CHANNEL_INDICES[2],
+                              GPIOConfig::DEFAULT_CHANNEL_INDICES[3]);
                      controlServer.sendHeader("Cache-Control", "no-store");
                      controlServer.send(200, "application/json", response);
                    });

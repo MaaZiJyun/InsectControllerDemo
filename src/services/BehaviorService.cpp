@@ -11,14 +11,8 @@
 
 namespace
 {
-  constexpr uint8_t CHANNEL_COUNT = 4;
-  constexpr int CHANNEL_PINS[CHANNEL_COUNT] = {
-      GPIOConfig::Chnl1,
-      GPIOConfig::Chnl2,
-      GPIOConfig::Chnl3,
-      GPIOConfig::Chnl4};
-
   Command configuredCommand = Command::Stop;
+  uint8_t configuredPins[GPIOConfig::CHANNEL_COUNT] = {};
 
   struct DrivePattern
   {
@@ -45,24 +39,39 @@ namespace
     }
   }
 
-  void setHighImpedance(uint8_t index)
+  void setAllHighImpedance()
   {
-    pinMode(CHANNEL_PINS[index], INPUT);
+    for (uint8_t index = 0; index < GPIOConfig::PIN_OPTION_COUNT; ++index)
+    {
+      pinMode(GPIOConfig::CONFIGURABLE_PINS[index], INPUT);
+    }
   }
 
-  void setActiveOutput(uint8_t index)
+  void setActiveOutput(uint8_t pin)
   {
-    pinMode(CHANNEL_PINS[index], OUTPUT);
-    digitalWrite(CHANNEL_PINS[index], LOW);
+    pinMode(pin, OUTPUT);
+    digitalWrite(pin, LOW);
   }
 
-  void writeSignal(uint8_t index, uint16_t signalCode)
+  void writeSignal(uint8_t pin, uint16_t signalCode)
   {
-    digitalWrite(CHANNEL_PINS[index],
+    digitalWrite(pin,
                  signalCode == ControllerConfig::SIGNAL_LOW ? LOW : HIGH);
   }
 
-  bool configureFor(Command command)
+  bool pinsMatch(const uint8_t channelPins[GPIOConfig::CHANNEL_COUNT])
+  {
+    for (uint8_t index = 0; index < GPIOConfig::CHANNEL_COUNT; ++index)
+    {
+      if (configuredPins[index] != channelPins[index])
+      {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  bool configureFor(Command command, const uint8_t channelPins[GPIOConfig::CHANNEL_COUNT])
   {
     const DrivePattern pattern = patternFor(command);
     if (!pattern.valid)
@@ -70,14 +79,14 @@ namespace
       return false;
     }
 
-    // Disconnect every channel before selecting a new electrode pattern.
-    for (uint8_t index = 0; index < CHANNEL_COUNT; ++index)
+    setAllHighImpedance();
+    for (uint8_t index = 0; index < GPIOConfig::CHANNEL_COUNT; ++index)
     {
-      setHighImpedance(index);
+      configuredPins[index] = channelPins[index];
     }
 
-    setActiveOutput(pattern.primary);
-    setActiveOutput(pattern.secondary);
+    setActiveOutput(configuredPins[pattern.primary]);
+    setActiveOutput(configuredPins[pattern.secondary]);
 
     configuredCommand = command;
     return true;
@@ -91,14 +100,13 @@ void BehaviorService::enable()
 
 void BehaviorService::stop()
 {
-  for (uint8_t index = 0; index < CHANNEL_COUNT; ++index)
-  {
-    setHighImpedance(index);
-  }
+  setAllHighImpedance();
   configuredCommand = Command::Stop;
 }
 
-bool BehaviorService::applyPhase(Command command, bool reversePolarity)
+bool BehaviorService::applyPhase(Command command,
+                                 const uint8_t channelPins[GPIOConfig::CHANNEL_COUNT],
+                                 bool reversePolarity)
 {
   if (command == Command::Stop)
   {
@@ -106,7 +114,8 @@ bool BehaviorService::applyPhase(Command command, bool reversePolarity)
     return true;
   }
 
-  if (configuredCommand != command && !configureFor(command))
+  if ((configuredCommand != command || !pinsMatch(channelPins)) &&
+      !configureFor(command, channelPins))
   {
     stop();
     return false;
@@ -121,7 +130,7 @@ bool BehaviorService::applyPhase(Command command, bool reversePolarity)
                                       ? ControllerConfig::SIGNAL_LOW
                                       : ControllerConfig::SIGNAL_HIGH;
 
-  writeSignal(pattern.primary, primaryValue);
-  writeSignal(pattern.secondary, secondaryValue);
+  writeSignal(configuredPins[pattern.primary], primaryValue);
+  writeSignal(configuredPins[pattern.secondary], secondaryValue);
   return true;
 }

@@ -21,4 +21,5 @@ struct CommandRequest
   Command command;
   uint16_t cycleCount;
   uint16_t phaseDurationMs;
+  uint8_t channelPins[4];
 };

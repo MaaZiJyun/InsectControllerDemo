@@ -10,11 +10,11 @@
 
 void BoardComp::enable()
 {
-  // Keep every behavior channel electrically disconnected until commanded.
-  pinMode(GPIOConfig::Chnl1, INPUT);
-  pinMode(GPIOConfig::Chnl2, INPUT);
-  pinMode(GPIOConfig::Chnl3, INPUT);
-  pinMode(GPIOConfig::Chnl4, INPUT);
+  // Keep every user-selectable behavior pin disconnected until commanded.
+  for (uint8_t index = 0; index < GPIOConfig::PIN_OPTION_COUNT; ++index)
+  {
+    pinMode(GPIOConfig::CONFIGURABLE_PINS[index], INPUT);
+  }
   pinMode(GPIOConfig::gpLed, OUTPUT); // Light
 
   digitalWrite(GPIOConfig::gpLed, LOW);

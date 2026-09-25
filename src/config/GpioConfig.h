@@ -9,9 +9,17 @@
 // GPIO settings
 namespace GPIOConfig
 {
-    static constexpr int Chnl1 = D7; // Channel 1: grounding cable
-    static constexpr int Chnl2 = D8; // Channel 2: left antenna
-    static constexpr int Chnl3 = D9; // Channel 3: right antenna
-    static constexpr int Chnl4 = D10; // Channel 4: cerci
+    inline constexpr uint8_t CHANNEL_COUNT = 4;
+    inline constexpr uint8_t PIN_OPTION_COUNT = 11;
+    inline constexpr uint8_t DEFAULT_CHANNEL_INDICES[CHANNEL_COUNT] = {7, 8, 9, 10};
+    inline constexpr int DEFAULT_CHANNEL_PINS[CHANNEL_COUNT] = {D7, D8, D9, D10};
+    inline constexpr int CONFIGURABLE_PINS[PIN_OPTION_COUNT] = {
+        D0, D1, D2, D3, D4, D5, D6, D7, D8, D9, D10};
+
+    inline constexpr int pinForIndex(uint8_t index)
+    {
+        return index < PIN_OPTION_COUNT ? CONFIGURABLE_PINS[index] : -1;
+    }
+
     static constexpr int gpLed = D1; // Indicator light
 }
