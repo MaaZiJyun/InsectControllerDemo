@@ -34,6 +34,18 @@ bool CameraComp::enable()
     return false;
   }
 
+  // Keep the 180° orientation, then mirror it horizontally. The extra
+  // horizontal mirror cancels the rotation's horizontal flip, leaving vflip.
+  sensor_t *sensor = esp_camera_sensor_get();
+  if (sensor == nullptr ||
+      sensor->set_hmirror(sensor, 0) != 0 ||
+      sensor->set_vflip(sensor, 1) != 0)
+  {
+    Serial.println("Failed to rotate camera image");
+    esp_camera_deinit();
+    return false;
+  }
+
   cameraEnabled = true;
   Serial.printf("Camera initialized (%s PSRAM)\n",
                 hasPsram ? "with" : "without");

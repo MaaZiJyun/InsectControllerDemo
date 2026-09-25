@@ -12,33 +12,41 @@
 namespace
 {
 
-    // bool joinExternalWifi()
-    // {
-    //     Serial.printf("Connecting to external Wi-Fi: %s\n", WifiConfig::EX_SSID);
+    bool joinExternalWifi()
+    {
+        Serial.printf("Connecting to external Wi-Fi: %s\n", WifiConfig::EX_SSID);
 
-    //     WiFi.mode(WIFI_STA);
-    //     WiFi.begin(WifiConfig::EX_SSID, WifiConfig::EX_PASSWORD);
+        WiFi.mode(WIFI_STA);
+        WiFi.setSleep(false);
+        WiFi.begin(WifiConfig::EX_SSID, WifiConfig::EX_PASSWORD);
 
-    //     const unsigned long startedAt = millis();
-    //     while (WiFi.status() != WL_CONNECTED &&
-    //            millis() - startedAt < WifiConfig::WIFI_CONNECT_TIMEOUT_MS)
-    //     {
-    //         delay(250);
-    //         Serial.print('.');
-    //     }
-    //     Serial.println();
+        const unsigned long startedAt = millis();
+        while (WiFi.status() != WL_CONNECTED &&
+               millis() - startedAt < WifiConfig::WIFI_CONNECT_TIMEOUT_MS)
+        {
+            delay(250);
+            Serial.print('.');
+        }
+        Serial.println();
 
-    //     if (WiFi.status() == WL_CONNECTED)
-    //     {
-    //         Serial.printf("Connected to %s\n", WifiConfig::EX_SSID);
-    //         Serial.print("Station IP: ");
-    //         Serial.println(WiFi.localIP());
-    //         return true;
-    //     }
+        if (WiFi.status() == WL_CONNECTED)
+        {
+            const IPAddress address = WiFi.localIP();
+            Serial.printf("WIFI_CONNECTED SSID=%s IP=%s\n",
+                          WifiConfig::EX_SSID,
+                          address.toString().c_str());
+            Serial.printf("Controller URL: http://%s/\n", address.toString().c_str());
+            Serial.printf("Video URL: http://%s:81/stream\n", address.toString().c_str());
+            return true;
+        }
 
-    //     Serial.printf("Could not connect to %s\n", WifiConfig::EX_SSID);
-    //     return false;
-    // }
+        Serial.printf("WIFI_FAILED SSID=%s STATUS=%d\n",
+                      WifiConfig::EX_SSID,
+                      static_cast<int>(WiFi.status()));
+        Serial.println("Falling back to access point");
+        WiFi.disconnect(true);
+        return false;
+    }
 
     bool createAccessPoint()
     {
@@ -63,9 +71,8 @@ namespace
 
 void WifiComp::enable()
 {
-    // if (!joinExternalWifi())
-    // {
-    //     createAccessPoint();
-    // }
-    createAccessPoint();
+    if (!joinExternalWifi())
+    {
+        createAccessPoint();
+    }
 }
