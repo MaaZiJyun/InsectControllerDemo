@@ -19,7 +19,7 @@ enum class Command : uint8_t
 struct CommandRequest
 {
   Command command;
-  uint16_t cycleCount;
+  uint32_t durationMs;
   uint16_t phaseDurationMs;
   uint8_t channelPins[4];
 };

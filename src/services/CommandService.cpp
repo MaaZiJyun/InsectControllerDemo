@@ -40,25 +40,25 @@ bool parseCommand(const String &name, Command &command)
   return true;
 }
 
-bool parseCycleCount(uint16_t &cycleCount)
+bool parseDuration(uint32_t &durationMs)
 {
-  if (!controlServer.hasArg("cycleCount"))
+  if (!controlServer.hasArg("durationMs"))
   {
-    cycleCount = ControllerConfig::DEFAULT_CYCLE_COUNT;
+    durationMs = ControllerConfig::DEFAULT_DURATION_MS;
     return true;
   }
 
-  const String value = controlServer.arg("cycleCount");
+  const String value = controlServer.arg("durationMs");
   char *end = nullptr;
-  const unsigned long parsed = strtoul(value.c_str(), &end, 10);
+  const unsigned long long parsed = strtoull(value.c_str(), &end, 10);
   if (end == value.c_str() || *end != '\0' ||
-      parsed < ControllerConfig::MIN_CYCLE_COUNT ||
-      parsed > ControllerConfig::MAX_CYCLE_COUNT)
+      parsed < ControllerConfig::MIN_DURATION_MS ||
+      parsed > ControllerConfig::MAX_DURATION_MS)
   {
     return false;
   }
 
-  cycleCount = static_cast<uint16_t>(parsed);
+  durationMs = static_cast<uint32_t>(parsed);
   return true;
 }
 
@@ -143,10 +143,9 @@ void executeCommand(CommandRequest request)
 
   unsigned long startedAt = millis();
   bool reversePolarity = false;
-  uint32_t completedPhases = 0;
-  uint32_t phaseCount = static_cast<uint32_t>(request.cycleCount) * 2U;
 
-  while (request.command != Command::Stop && completedPhases < phaseCount)
+  while (request.command != Command::Stop &&
+         millis() - startedAt < request.durationMs)
   {
     if (!BehaviorService::applyPhase(request.command,
                                      request.channelPins,
@@ -155,24 +154,23 @@ void executeCommand(CommandRequest request)
       break;
     }
     reversePolarity = !reversePolarity;
-    ++completedPhases;
+
+    const uint32_t elapsedMs = millis() - startedAt;
+    const uint32_t remainingMs = elapsedMs < request.durationMs
+                                     ? request.durationMs - elapsedMs
+                                     : 0;
+    const uint32_t waitMs = min(static_cast<uint32_t>(request.phaseDurationMs),
+                                remainingMs);
 
     CommandRequest replacement;
     if (xQueueReceive(commandQueue,
                       &replacement,
-                      pdMS_TO_TICKS(request.phaseDurationMs)) == pdTRUE)
+                      pdMS_TO_TICKS(waitMs)) == pdTRUE)
     {
       request = replacement;
       startedAt = millis();
       reversePolarity = false;
-      completedPhases = 0;
-      phaseCount = static_cast<uint32_t>(request.cycleCount) * 2U;
       continue;
-    }
-
-    if (millis() - startedAt >= ControllerConfig::COMMAND_TIMEOUT_MS)
-    {
-      break;
     }
   }
 
@@ -201,7 +199,7 @@ void handleCommandRequest()
     return;
   }
 
-  uint16_t cycleCount = ControllerConfig::DEFAULT_CYCLE_COUNT;
+  uint32_t durationMs = ControllerConfig::DEFAULT_DURATION_MS;
   uint16_t phaseDurationMs = ControllerConfig::DEFAULT_PHASE_DURATION_MS;
   uint8_t channelPins[GPIOConfig::CHANNEL_COUNT] = {};
   if (!parseChannelPins(channelPins))
@@ -211,22 +209,13 @@ void handleCommandRequest()
   }
 
   if (command != Command::Stop &&
-      (!parseCycleCount(cycleCount) || !parsePhaseDuration(phaseDurationMs)))
+      (!parseDuration(durationMs) || !parsePhaseDuration(phaseDurationMs)))
   {
     controlServer.send(400, "application/json", "{\"ok\":false,\"error\":\"invalid waveform settings\"}");
     return;
   }
 
-  const uint32_t durationMs =
-      static_cast<uint32_t>(cycleCount) * 2U * phaseDurationMs;
-  if (command != Command::Stop &&
-      durationMs > ControllerConfig::COMMAND_TIMEOUT_MS)
-  {
-    controlServer.send(400, "application/json", "{\"ok\":false,\"error\":\"waveform exceeds 500 ms safety timeout\"}");
-    return;
-  }
-
-  CommandRequest request = {command, cycleCount, phaseDurationMs, {}};
+  CommandRequest request = {command, durationMs, phaseDurationMs, {}};
   for (uint8_t index = 0; index < GPIOConfig::CHANNEL_COUNT; ++index)
   {
     request.channelPins[index] = channelPins[index];
@@ -238,11 +227,11 @@ void handleCommandRequest()
   }
 
   controlServer.sendHeader("Cache-Control", "no-store");
-  char response[96];
+  char response[112];
   snprintf(response,
            sizeof(response),
-           "{\"ok\":true,\"cycleCount\":%u,\"phaseDurationMs\":%u}",
-           cycleCount,
+           "{\"ok\":true,\"durationMs\":%lu,\"phaseDurationMs\":%u}",
+           static_cast<unsigned long>(durationMs),
            phaseDurationMs);
   controlServer.send(200, "application/json", response);
 }
@@ -286,16 +275,15 @@ bool CommandService::enable()
                      char response[320];
                      snprintf(response,
                               sizeof(response),
-                              "{\"controlPort\":%u,\"videoPort\":%u,\"cycleCount\":%u,\"frequency\":%.1f,\"minCycleCount\":%u,\"maxCycleCount\":%u,\"minFrequency\":%.1f,\"maxFrequency\":%.1f,\"maxDurationMs\":%lu,\"defaultPins\":[%u,%u,%u,%u]}",
+                              "{\"controlPort\":%u,\"videoPort\":%u,\"durationMs\":%lu,\"frequency\":%.1f,\"minDurationMs\":%lu,\"maxDurationMs\":%lu,\"minFrequency\":%.1f,\"maxFrequency\":%.1f,\"defaultPins\":[%u,%u,%u,%u]}",
                               ControllerConfig::CONTROL_PORT,
                               ControllerConfig::VIDEO_PORT,
-                              ControllerConfig::DEFAULT_CYCLE_COUNT,
+                              static_cast<unsigned long>(ControllerConfig::DEFAULT_DURATION_MS),
                               ControllerConfig::DEFAULT_FREQUENCY_HZ,
-                              ControllerConfig::MIN_CYCLE_COUNT,
-                              ControllerConfig::MAX_CYCLE_COUNT,
+                              static_cast<unsigned long>(ControllerConfig::MIN_DURATION_MS),
+                              static_cast<unsigned long>(ControllerConfig::MAX_DURATION_MS),
                               ControllerConfig::MIN_FREQUENCY_HZ,
                               ControllerConfig::MAX_FREQUENCY_HZ,
-                              static_cast<unsigned long>(ControllerConfig::COMMAND_TIMEOUT_MS),
                               GPIOConfig::DEFAULT_CHANNEL_INDICES[0],
                               GPIOConfig::DEFAULT_CHANNEL_INDICES[1],
                               GPIOConfig::DEFAULT_CHANNEL_INDICES[2],

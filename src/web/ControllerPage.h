@@ -385,7 +385,7 @@ namespace ControllerPage
                 <div class="settings-title">
                     <h2 id="settingsTitle">Settings</h2><button id="closeSettings" class="close-settings" type="button">Close</button>
                 </div>
-                <label class="setting">Cycles<input id="cycleCount" type="number" inputmode="numeric"></label>
+                <label class="setting">Duration (ms)<input id="durationMs" type="number" inputmode="numeric"></label>
                 <label class="setting">Frequency (Hz)<input id="frequency" type="number" inputmode="decimal"></label>
                 <div class="pin-settings">
                     <h3>GPIO mapping</h3>
@@ -400,7 +400,7 @@ namespace ControllerPage
         const video = document.getElementById('video'),
             cameraDot = document.getElementById('cameraDot'),
             cameraStatus = document.getElementById('cameraStatus');
-        const cycleInput = document.getElementById('cycleCount'),
+        const durationInput = document.getElementById('durationMs'),
             frequencyInput = document.getElementById('frequency'),
             waveInfo = document.getElementById('waveInfo');
         const settingsModal = document.getElementById('settingsModal');
@@ -412,7 +412,7 @@ namespace ControllerPage
             ['Chnl4', 'Forward']
         ];
         const pinStorageKey = 'insect-controller-channel-pins-v1';
-        let maxDurationMs = 500;
+        let maxDurationMs = 4294967295;
 
         ['Variable', 'Role', 'Output pin'].forEach(label => {
             const heading = document.createElement('span');
@@ -462,16 +462,15 @@ namespace ControllerPage
         video.addEventListener('load', () => setCameraState('online', 'Camera Online'));
         video.addEventListener('error', () => setCameraState('offline', 'Camera Connection Failed'));
 
-        function waveform() {
-            const cycles = Number(cycleInput.value),
+        function stimulation() {
+            const durationMs = Number(durationInput.value),
                 frequency = Number(frequencyInput.value);
             const phaseMs = Math.max(1, Math.round(500 / frequency));
-            const durationMs = cycles * 2 * phaseMs;
-            const valid = Number.isInteger(cycles) && cycles >= Number(cycleInput.min) && cycles <= Number(cycleInput.max) && Number.isFinite(frequency) && frequency >= Number(frequencyInput.min) && frequency <= Number(frequencyInput.max) && durationMs <= maxDurationMs;
-            waveInfo.textContent = valid ? 'Phase ' + phaseMs + ' ms · Total ' + durationMs + ' ms' : 'Invalid: total duration must be ≤ ' + maxDurationMs + ' ms';
+            const valid = Number.isInteger(durationMs) && durationMs >= Number(durationInput.min) && durationMs <= maxDurationMs && Number.isFinite(frequency) && frequency >= Number(frequencyInput.min) && frequency <= Number(frequencyInput.max);
+            waveInfo.textContent = valid ? 'Phase ' + phaseMs + ' ms · Duration ' + durationMs + ' ms' : 'Invalid duration or frequency';
             waveInfo.classList.toggle('invalid', !valid);
             return {
-                cycles,
+                durationMs,
                 frequency,
                 valid
             }
@@ -490,7 +489,7 @@ namespace ControllerPage
                 waveInfo.classList.add('invalid');
                 return false
             }
-            return waveform().valid
+            return stimulation().valid
         }
 
         function savePinMapping() {
@@ -512,7 +511,7 @@ namespace ControllerPage
             updateSettingsInfo()
         }
 
-        cycleInput.addEventListener('input', updateSettingsInfo);
+        durationInput.addEventListener('input', updateSettingsInfo);
         frequencyInput.addEventListener('input', updateSettingsInfo);
         pinGrid.addEventListener('change', () => {
             savePinMapping();
@@ -521,7 +520,7 @@ namespace ControllerPage
 
         function openSettings() {
             settingsModal.hidden = false;
-            cycleInput.focus()
+            durationInput.focus()
         }
 
         function closeSettings() {
@@ -542,9 +541,9 @@ namespace ControllerPage
             }
             pins.forEach((pin, index) => url += '&chnl' + (index + 1) + '=' + pin);
             if (name !== 'stop') {
-                const w = waveform();
+                const w = stimulation();
                 if (!w.valid) return Promise.resolve();
-                url += '&cycleCount=' + w.cycles + '&frequency=' + w.frequency
+                url += '&durationMs=' + w.durationMs + '&frequency=' + w.frequency
             }
             return fetch(url, {
                 method: 'POST',
@@ -560,9 +559,9 @@ namespace ControllerPage
             cache: 'no-store'
         }).then(r => r.json()).then(c => {
             video.src = 'http://' + location.hostname + ':' + c.videoPort + '/stream';
-            cycleInput.min = c.minCycleCount;
-            cycleInput.max = c.maxCycleCount;
-            cycleInput.value = c.cycleCount;
+            durationInput.min = c.minDurationMs;
+            durationInput.max = c.maxDurationMs;
+            durationInput.value = c.durationMs;
             frequencyInput.min = c.minFrequency;
             frequencyInput.max = c.maxFrequency;
             frequencyInput.step = '0.1';
