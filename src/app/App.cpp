@@ -12,6 +12,7 @@
 #include "../components/WifiComp.h"
 #include "../services/BehaviorService.h"
 #include "../services/CommandService.h"
+#include "../services/DiscoveryService.h"
 #include "../services/VideoService.h"
 
 #include <Arduino.h>
@@ -38,6 +39,7 @@ void App::begin(){
   BehaviorService::enable();
   VideoService::enable();
   CommandService::enable();
+  DiscoveryService::enable();
 }
 
 // 主循环
@@ -45,6 +47,7 @@ void App::begin(){
 void App::update()
 {
   CommandService::update();
+  DiscoveryService::update();
 
   // Give background Wi-Fi and camera tasks CPU time without blocking them.
   delay(1);

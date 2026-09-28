@@ -9,7 +9,7 @@
 namespace WifiConfig
 {
 
-    static constexpr long WIFI_CONNECT_TIMEOUT_MS = 15000;
+    static constexpr long WIFI_CONNECT_TIMEOUT_MS = 10000;
 
     static constexpr char AP_SSID[] = "XIAOESP32S3";      /// 网络名称。
     static constexpr char AP_PASSWORD[] = "xiaoesp32s3";  /// 访问密码。

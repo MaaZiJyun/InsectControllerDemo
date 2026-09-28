@@ -2,7 +2,7 @@
 
 set -euo pipefail
 
-readonly FQBN="esp32:esp32:XIAO_ESP32S3"
+readonly FQBN="esp32:esp32:XIAO_ESP32S3:PSRAM=opi"
 readonly SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 readonly BUILD_DIR="${TMPDIR:-/tmp}/InsectControllerDemo-build"
 

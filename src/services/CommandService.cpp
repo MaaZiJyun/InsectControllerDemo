@@ -5,6 +5,9 @@
 #include "CommandService.h"
 
 #include "BehaviorService.h"
+#include "VideoService.h"
+#include "../components/CameraComp.h"
+#include "../components/WifiComp.h"
 #include "../config/ControllerConfig.h"
 #include "../config/GpioConfig.h"
 #include "../web/ControllerPage.h"
@@ -22,6 +25,301 @@ WebServer controlServer(ControllerConfig::CONTROL_PORT);
 QueueHandle_t commandQueue = nullptr;
 TaskHandle_t commandTaskHandle = nullptr;
 bool serverEnabled = false;
+
+bool parseSignedSetting(const char *name, int8_t &value)
+{
+  if (!controlServer.hasArg(name))
+  {
+    return true;
+  }
+  const String input = controlServer.arg(name);
+  char *end = nullptr;
+  const long parsed = strtol(input.c_str(), &end, 10);
+  if (end == input.c_str() || *end != '\0' || parsed < -2 || parsed > 2)
+  {
+    return false;
+  }
+  value = static_cast<int8_t>(parsed);
+  return true;
+}
+
+bool parseBooleanSetting(const char *name, bool &value)
+{
+  if (!controlServer.hasArg(name))
+  {
+    return true;
+  }
+  const String input = controlServer.arg(name);
+  if (input == "1" || input == "true")
+  {
+    value = true;
+    return true;
+  }
+  if (input == "0" || input == "false")
+  {
+    value = false;
+    return true;
+  }
+  return false;
+}
+
+void sendCameraSettings()
+{
+  CameraComp::Settings settings = {};
+  if (!CameraComp::getSettings(settings))
+  {
+    controlServer.send(503, "application/json", "{\"ok\":false,\"error\":\"camera unavailable\"}");
+    return;
+  }
+
+  char pid[12] = {};
+  snprintf(pid, sizeof(pid), "0x%04X", CameraComp::sensorPid());
+
+  String response;
+  response.reserve(1800);
+  response += "{\"ok\":true,\"sensorModel\":\"";
+  response += CameraComp::sensorModel();
+  response += "\",\"sensorPid\":\"";
+  response += pid;
+  response += "\",\"psram\":{\"enabled\":";
+  response += CameraComp::hasPsram() ? "true" : "false";
+  response += ",\"totalBytes\":";
+  response += static_cast<unsigned long>(ESP.getPsramSize());
+  response += ",\"freeBytes\":";
+  response += static_cast<unsigned long>(ESP.getFreePsram());
+  response += "},\"allocationResolution\":\"";
+  response += CameraComp::resolutionName(CameraComp::allocationFrameSize());
+  response += "\",\"resolution\":\"";
+  response += CameraComp::resolutionName(settings.frameSize);
+  response += "\",\"fps\":";
+  response += static_cast<unsigned int>(settings.fps);
+  response += ",\"brightness\":";
+  response += static_cast<int>(settings.brightness);
+  response += ",\"contrast\":";
+  response += static_cast<int>(settings.contrast);
+  response += ",\"sharpness\":";
+  response += static_cast<int>(settings.sharpness);
+  response += ",\"hmirror\":";
+  response += settings.hmirror ? "true" : "false";
+  response += ",\"vflip\":";
+  response += settings.vflip ? "true" : "false";
+  response += ",\"streamGeneration\":";
+  response += static_cast<unsigned long>(VideoService::generation());
+  response += ",\"supportedResolutions\":[";
+
+  const size_t resolutionCount = CameraComp::supportedResolutionCount();
+  for (size_t index = 0; index < resolutionCount; ++index)
+  {
+    if (index > 0)
+      response += ',';
+    response += '\"';
+    response += CameraComp::supportedResolutionAt(index);
+    response += '\"';
+  }
+
+  response += "],\"maxFpsByResolution\":{";
+  for (size_t index = 0; index < resolutionCount; ++index)
+  {
+    const char *resolutionName = CameraComp::supportedResolutionAt(index);
+    framesize_t frameSize = FRAMESIZE_INVALID;
+    CameraComp::parseResolution(resolutionName, frameSize);
+    if (index > 0)
+      response += ',';
+    response += '\"';
+    response += resolutionName;
+    response += "\":";
+    response += static_cast<unsigned int>(CameraComp::maxFpsForFrameSize(frameSize));
+  }
+  response += "},\"limits\":{\"fps\":[1,";
+  response += static_cast<unsigned int>(CameraComp::maxFpsForFrameSize(settings.frameSize));
+  response += "],\"brightness\":[-2,2],\"contrast\":[-2,2],\"sharpness\":[-2,2]}}";
+
+  controlServer.sendHeader("Cache-Control", "no-store");
+  controlServer.send(200, "application/json", response);
+}
+
+void handleCameraSettingsRequest()
+{
+  CameraComp::Settings settings = {};
+  if (!CameraComp::getSettings(settings))
+  {
+    controlServer.send(503, "application/json", "{\"ok\":false,\"error\":\"camera unavailable\"}");
+    return;
+  }
+
+  const char *settingNames[] = {
+      "resolution", "fps", "brightness", "contrast", "sharpness", "hmirror", "vflip"};
+  bool hasAnySetting = false;
+  for (const char *name : settingNames)
+  {
+    hasAnySetting = hasAnySetting || controlServer.hasArg(name);
+  }
+  if (!hasAnySetting)
+  {
+    controlServer.send(400, "application/json", "{\"ok\":false,\"error\":\"no camera settings supplied\"}");
+    return;
+  }
+
+  const bool changesResolution = controlServer.hasArg("resolution");
+  const bool suppliesFps = controlServer.hasArg("fps");
+  if (changesResolution &&
+      (!CameraComp::parseResolution(controlServer.arg("resolution").c_str(), settings.frameSize) ||
+       !CameraComp::supportsFrameSize(settings.frameSize)))
+  {
+    controlServer.send(400, "application/json", "{\"ok\":false,\"error\":\"unsupported resolution\"}");
+    return;
+  }
+
+  if (suppliesFps)
+  {
+    const String input = controlServer.arg("fps");
+    char *end = nullptr;
+    const unsigned long parsed = strtoul(input.c_str(), &end, 10);
+    if (end == input.c_str() || *end != '\0' || parsed < 1 || parsed > 60)
+    {
+      controlServer.send(400, "application/json", "{\"ok\":false,\"error\":\"fps must be between 1 and 60\"}");
+      return;
+    }
+    settings.fps = static_cast<uint8_t>(parsed);
+  }
+
+  const uint8_t maximumFps = CameraComp::maxFpsForFrameSize(settings.frameSize);
+  if (suppliesFps && settings.fps > maximumFps)
+  {
+    char response[112] = {};
+    snprintf(response,
+             sizeof(response),
+             "{\"ok\":false,\"error\":\"fps exceeds resolution limit\",\"maxFps\":%u}",
+             maximumFps);
+    controlServer.send(400, "application/json", response);
+    return;
+  }
+  if (!suppliesFps && settings.fps > maximumFps)
+  {
+    settings.fps = maximumFps;
+  }
+
+  if (!parseSignedSetting("brightness", settings.brightness) ||
+      !parseSignedSetting("contrast", settings.contrast) ||
+      !parseSignedSetting("sharpness", settings.sharpness) ||
+      !parseBooleanSetting("hmirror", settings.hmirror) ||
+      !parseBooleanSetting("vflip", settings.vflip))
+  {
+    controlServer.send(400, "application/json", "{\"ok\":false,\"error\":\"invalid camera setting\"}");
+    return;
+  }
+
+  const bool videoWasEnabled = VideoService::isEnabled();
+  bool streamNeedsRestart = false;
+  if (videoWasEnabled && !VideoService::pauseForCameraChange())
+  {
+    VideoService::disable();
+    streamNeedsRestart = true;
+    delay(25);
+  }
+
+  const bool settingsApplied = CameraComp::applySettings(settings);
+  bool videoAvailable = CameraComp::isEnabled();
+  if (videoWasEnabled && videoAvailable)
+  {
+    if (streamNeedsRestart)
+    {
+      videoAvailable = VideoService::enable();
+    }
+    else
+    {
+      VideoService::resumeAfterCameraChange();
+    }
+  }
+  if (!settingsApplied)
+  {
+    controlServer.send(500,
+                       "application/json",
+                       videoAvailable
+                           ? "{\"ok\":false,\"error\":\"camera rejected settings; previous settings restored\"}"
+                           : "{\"ok\":false,\"error\":\"camera rejected settings and video restart failed\"}");
+    return;
+  }
+  if (!videoAvailable)
+  {
+    controlServer.send(503, "application/json", "{\"ok\":false,\"error\":\"settings applied but video restart failed\"}");
+    return;
+  }
+  sendCameraSettings();
+}
+
+void handleCameraCaptureRequest()
+{
+  if (!CameraComp::isEnabled())
+  {
+    controlServer.send(503, "application/json", "{\"ok\":false,\"error\":\"camera unavailable\"}");
+    return;
+  }
+
+  // Pause frame acquisition but keep the MJPEG socket alive. The browser then
+  // continues on the same <img> request after the camera settings are restored.
+  const bool videoWasEnabled = VideoService::isEnabled();
+  bool streamNeedsRestart = false;
+  if (videoWasEnabled && !VideoService::pauseForCameraChange())
+  {
+    // A broken client may hold a socket send until its timeout. Fall back to a
+    // full restart rather than racing the camera while a frame is still owned.
+    VideoService::disable();
+    streamNeedsRestart = true;
+    delay(25);
+  }
+
+  uint8_t *jpeg = nullptr;
+  size_t jpegLength = 0;
+  uint16_t width = 0;
+  uint16_t height = 0;
+  const bool captured = CameraComp::captureMaximumJpeg(
+      jpeg, jpegLength, width, height);
+  bool videoAvailable = true;
+  if (videoWasEnabled)
+  {
+    if (streamNeedsRestart)
+    {
+      videoAvailable = VideoService::enable();
+    }
+    else
+    {
+      VideoService::resumeAfterCameraChange();
+    }
+  }
+
+  if (!captured)
+  {
+    controlServer.send(500,
+                       "application/json",
+                       videoAvailable
+                           ? "{\"ok\":false,\"error\":\"maximum-resolution capture failed\"}"
+                           : "{\"ok\":false,\"error\":\"capture failed and video restart failed\"}");
+    return;
+  }
+
+  if (!videoAvailable)
+  {
+    CameraComp::releaseSnapshot(jpeg);
+    controlServer.send(503,
+                       "application/json",
+                       "{\"ok\":false,\"error\":\"photo captured but video restart failed\"}");
+    return;
+  }
+
+  char resolution[24] = {};
+  snprintf(resolution, sizeof(resolution), "%ux%u", width, height);
+  controlServer.sendHeader("Cache-Control", "no-store");
+  controlServer.sendHeader("Content-Disposition", "inline; filename=controller-capture.jpg");
+  controlServer.sendHeader("X-Camera-Resolution", resolution);
+  controlServer.sendHeader("X-Stream-Reconnect-Required", streamNeedsRestart ? "true" : "false");
+  controlServer.sendHeader("X-Stream-Generation", String(VideoService::generation()));
+  controlServer.send_P(200,
+                       PSTR("image/jpeg"),
+                       reinterpret_cast<PGM_P>(jpeg),
+                       jpegLength);
+  CameraComp::releaseSnapshot(jpeg);
+}
 
 bool parseCommand(const String &name, Command &command)
 {
@@ -267,15 +565,23 @@ bool CommandService::enable()
 
   controlServer.on("/", HTTP_GET, []()
                    {
+                     if (!WifiComp::isAccessPointMode())
+                     {
+                       controlServer.send(404,
+                                          "application/json",
+                                          "{\"ok\":false,\"error\":\"onboard controller is only available in access-point mode\"}");
+                       return;
+                     }
                      controlServer.sendHeader("Cache-Control", "no-store");
                      controlServer.send_P(200, "text/html; charset=utf-8", ControllerPage::HTML);
                    });
   controlServer.on("/config", HTTP_GET, []()
                    {
-                     char response[320];
+                     char response[384];
                      snprintf(response,
                               sizeof(response),
-                              "{\"controlPort\":%u,\"videoPort\":%u,\"durationMs\":%lu,\"frequency\":%.1f,\"minDurationMs\":%lu,\"maxDurationMs\":%lu,\"minFrequency\":%.1f,\"maxFrequency\":%.1f,\"defaultPins\":[%u,%u,%u,%u]}",
+                              "{\"model\":\"XIAO ESP32S3 Sense\",\"networkMode\":\"%s\",\"controlPort\":%u,\"videoPort\":%u,\"durationMs\":%lu,\"frequency\":%.1f,\"minDurationMs\":%lu,\"maxDurationMs\":%lu,\"minFrequency\":%.1f,\"maxFrequency\":%.1f,\"defaultPins\":[%u,%u,%u,%u]}",
+                              WifiComp::isAccessPointMode() ? "access-point" : "station",
                               ControllerConfig::CONTROL_PORT,
                               ControllerConfig::VIDEO_PORT,
                               static_cast<unsigned long>(ControllerConfig::DEFAULT_DURATION_MS),
@@ -292,8 +598,18 @@ bool CommandService::enable()
                      controlServer.send(200, "application/json", response);
                    });
   controlServer.on("/command", HTTP_POST, handleCommandRequest);
+  controlServer.on("/command", HTTP_OPTIONS, []()
+                   { controlServer.send(204); });
+  controlServer.on("/camera/settings", HTTP_GET, sendCameraSettings);
+  controlServer.on("/camera/settings", HTTP_POST, handleCameraSettingsRequest);
+  controlServer.on("/camera/settings", HTTP_OPTIONS, []()
+                   { controlServer.send(204); });
+  controlServer.on("/camera/capture", HTTP_GET, handleCameraCaptureRequest);
+  controlServer.on("/camera/capture", HTTP_OPTIONS, []()
+                   { controlServer.send(204); });
   controlServer.onNotFound([]()
                            { controlServer.send(404, "application/json", "{\"ok\":false,\"error\":\"not found\"}"); });
+  controlServer.enableCORS(true);
   controlServer.begin();
   serverEnabled = true;
 

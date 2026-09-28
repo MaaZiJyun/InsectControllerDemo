@@ -32,7 +32,7 @@ namespace CameraConfig
     static constexpr int LED_GPIO_NUM = 21;
     static constexpr int XCLK_FREQ_HZ = 20000000;
 
-    inline camera_config_t create(bool hasPsram)
+    inline camera_config_t create(bool hasPsram, framesize_t allocationFrameSize)
     {
         camera_config_t config = {};
         config.ledc_channel = LEDC_CHANNEL_0;
@@ -55,13 +55,14 @@ namespace CameraConfig
         config.pin_reset = RESET_GPIO_NUM;
         config.xclk_freq_hz = XCLK_FREQ_HZ;
         config.pixel_format = PIXFORMAT_JPEG;
-        // Favor low latency for the live controller stream.
         if (hasPsram)
         {
-            config.frame_size = FRAMESIZE_VGA;
-            config.jpeg_quality = 14;
+            // Allocate for the largest planned runtime resolution. The sensor
+            // is lowered to the requested output size after initialization.
+            config.frame_size = allocationFrameSize;
+            config.jpeg_quality = 12;
             config.fb_count = 2;
-            config.grab_mode = CAMERA_GRAB_WHEN_EMPTY;
+            config.grab_mode = CAMERA_GRAB_LATEST;
             config.fb_location = CAMERA_FB_IN_PSRAM;
         }
         else

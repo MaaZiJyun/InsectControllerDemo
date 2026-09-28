@@ -10,6 +10,7 @@ namespace ControllerConfig
 {
 inline constexpr uint16_t CONTROL_PORT = 80;
 inline constexpr uint16_t VIDEO_PORT = 81;
+inline constexpr uint16_t DISCOVERY_PORT = 37020;
 
 inline constexpr uint16_t DEFAULT_PHASE_DURATION_MS = 10;
 inline constexpr uint32_t DEFAULT_DURATION_MS = 500;

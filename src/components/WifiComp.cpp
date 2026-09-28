@@ -11,6 +11,7 @@
 
 namespace
 {
+    bool accessPointMode = false;
 
     bool joinExternalWifi()
     {
@@ -31,11 +32,12 @@ namespace
 
         if (WiFi.status() == WL_CONNECTED)
         {
+            accessPointMode = false;
             const IPAddress address = WiFi.localIP();
             Serial.printf("WIFI_CONNECTED SSID=%s IP=%s\n",
                           WifiConfig::EX_SSID,
                           address.toString().c_str());
-            Serial.printf("Controller URL: http://%s/\n", address.toString().c_str());
+            Serial.printf("Control API: http://%s/config\n", address.toString().c_str());
             Serial.printf("Video URL: http://%s:81/stream\n", address.toString().c_str());
             return true;
         }
@@ -57,9 +59,12 @@ namespace
 
         if (WiFi.softAP(WifiConfig::AP_SSID, WifiConfig::AP_PASSWORD))
         {
+            accessPointMode = true;
             WiFi.setSleep(false);
             Serial.print("Access point IP: ");
             Serial.println(WiFi.softAPIP());
+            Serial.printf("Onboard controller URL: http://%s/\n",
+                          WiFi.softAPIP().toString().c_str());
             return true;
         }
 
@@ -75,4 +80,9 @@ void WifiComp::enable()
     {
         createAccessPoint();
     }
+}
+
+bool WifiComp::isAccessPointMode()
+{
+    return accessPointMode;
 }
