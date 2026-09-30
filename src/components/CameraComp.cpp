@@ -27,31 +27,12 @@ struct ResolutionOption
 };
 
 constexpr ResolutionOption RESOLUTION_OPTIONS[] = {
-    {"96x96", FRAMESIZE_96X96},
-    {"160x120", FRAMESIZE_QQVGA},
-    {"128x128", FRAMESIZE_128X128},
-    {"176x144", FRAMESIZE_QCIF},
-    {"240x176", FRAMESIZE_HQVGA},
-    {"240x240", FRAMESIZE_240X240},
-    {"320x240", FRAMESIZE_QVGA},
-    {"320x320", FRAMESIZE_320X320},
-    {"400x296", FRAMESIZE_CIF},
-    {"480x320", FRAMESIZE_HVGA},
-    {"640x480", FRAMESIZE_VGA},
-    {"800x600", FRAMESIZE_SVGA},
-    {"1024x768", FRAMESIZE_XGA},
-    {"1280x720", FRAMESIZE_HD},
-    {"1280x1024", FRAMESIZE_SXGA},
-    {"1600x1200", FRAMESIZE_UXGA},
-    {"1920x1080", FRAMESIZE_FHD},
-    {"720x1280", FRAMESIZE_P_HD},
-    {"864x1536", FRAMESIZE_P_3MP},
     {"2048x1536", FRAMESIZE_QXGA},
-    {"2560x1440", FRAMESIZE_QHD},
-    {"2560x1600", FRAMESIZE_WQXGA},
-    {"1080x1920", FRAMESIZE_P_FHD},
-    {"2560x1920", FRAMESIZE_QSXGA},
-    {"2592x1944", FRAMESIZE_5MP},
+    {"1920x1080", FRAMESIZE_FHD},
+    {"1280x720", FRAMESIZE_HD},
+    {"1024x768", FRAMESIZE_XGA},
+    {"640x480", FRAMESIZE_VGA},
+    {"320x240", FRAMESIZE_QVGA},
 };
 
 bool applySensorSettings(sensor_t *sensor, const CameraComp::Settings &settings)
@@ -195,7 +176,7 @@ bool CameraComp::enable()
   }
 
   const Settings defaults = {
-      psramEnabled ? FRAMESIZE_240X240 : FRAMESIZE_QVGA,
+      psramEnabled ? FRAMESIZE_VGA : FRAMESIZE_QVGA,
       30,
       0,
       0,
@@ -375,19 +356,22 @@ const char *CameraComp::supportedResolutionAt(size_t index)
 
 uint8_t CameraComp::maxFpsForFrameSize(framesize_t frameSize)
 {
-  if (frameSize <= FRAMESIZE_QVGA)
+  switch (frameSize)
+  {
+  case FRAMESIZE_QVGA:
+    return 120;
+  case FRAMESIZE_VGA:
     return 60;
-  if (frameSize <= FRAMESIZE_VGA)
-    return 30;
-  if (frameSize <= FRAMESIZE_SVGA)
-    return 25;
-  if (frameSize <= FRAMESIZE_HD)
+  case FRAMESIZE_XGA:
+  case FRAMESIZE_HD:
+    return 45;
+  case FRAMESIZE_FHD:
     return 20;
-  if (frameSize <= FRAMESIZE_UXGA)
+  case FRAMESIZE_QXGA:
     return 15;
-  if (frameSize <= FRAMESIZE_FHD)
-    return 12;
-  return 10;
+  default:
+    return 1;
+  }
 }
 
 const char *CameraComp::sensorModel()

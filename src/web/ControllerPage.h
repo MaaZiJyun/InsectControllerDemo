@@ -194,7 +194,8 @@ namespace ControllerPage
         }
 
         .setting input,
-        .pin-grid select {
+        .pin-grid select,
+        .wifi-settings input {
             width: 100%;
             padding: 9px;
             border: 1px solid rgba(255, 255, 255, .32);
@@ -207,7 +208,8 @@ namespace ControllerPage
         }
 
         .setting input:focus,
-        .pin-grid select:focus {
+        .pin-grid select:focus,
+        .wifi-settings input:focus {
             border-color: rgba(255, 255, 255, .8)
         }
 
@@ -254,6 +256,50 @@ namespace ControllerPage
         .pin-help {
             font-size: .66rem;
             opacity: .74
+        }
+
+        .wifi-settings {
+            grid-column: 1/-1;
+            display: grid;
+            gap: 9px;
+            padding-top: 12px;
+            border-top: 1px solid rgba(255, 255, 255, .18)
+        }
+
+        .wifi-settings h3 {
+            margin: 0;
+            font-size: .86rem
+        }
+
+        .wifi-row {
+            display: grid;
+            grid-template-columns: 1fr auto;
+            gap: 8px
+        }
+
+        .wifi-row button,
+        .join-wifi {
+            min-height: 38px;
+            padding: 8px 12px;
+            border-radius: 10px;
+            font-size: .75rem
+        }
+
+        .join-wifi {
+            width: 100%;
+            background: rgba(73, 209, 125, .28)
+        }
+
+        .wifi-status {
+            min-height: 1.2em;
+            font-size: .68rem;
+            line-height: 1.4;
+            opacity: .85
+        }
+
+        .wifi-status.error {
+            color: #ff8b87;
+            opacity: 1
         }
 
         .wave-info {
@@ -393,6 +439,17 @@ namespace ControllerPage
                     <div class="pin-help">Forward: Chnl1 + Chnl4 · Right: Chnl1 + Chnl2 · Left: Chnl1 + Chnl3 · Stop: high impedance</div>
                 </div>
                 <div id="waveInfo" class="wave-info">Loading settings…</div>
+                <div id="wifiSettings" class="wifi-settings">
+                    <h3>Join existing Wi-Fi</h3>
+                    <div class="wifi-row">
+                        <input id="wifiSsid" list="wifiNetworks" maxlength="32" autocomplete="off" placeholder="Wi-Fi name (SSID)">
+                        <datalist id="wifiNetworks"></datalist>
+                        <button id="scanWifi" type="button">Scan</button>
+                    </div>
+                    <input id="wifiPassword" type="password" maxlength="63" autocomplete="new-password" placeholder="Password (leave empty for open Wi-Fi)">
+                    <button id="joinWifi" class="join-wifi" type="button">Join Wi-Fi</button>
+                    <div id="wifiStatus" class="wifi-status">After a successful connection, this hotspot will close.</div>
+                </div>
             </div>
         </section>
     </main>
@@ -405,14 +462,22 @@ namespace ControllerPage
             waveInfo = document.getElementById('waveInfo');
         const settingsModal = document.getElementById('settingsModal');
         const pinGrid = document.getElementById('pinGrid');
+        const wifiSsid = document.getElementById('wifiSsid'),
+            wifiPassword = document.getElementById('wifiPassword'),
+            wifiNetworks = document.getElementById('wifiNetworks'),
+            scanWifiButton = document.getElementById('scanWifi'),
+            joinWifiButton = document.getElementById('joinWifi'),
+            wifiStatus = document.getElementById('wifiStatus');
         const pinVariables = [
             ['Chnl1', 'Ground'],
             ['Chnl2', 'Right'],
             ['Chnl3', 'Left'],
             ['Chnl4', 'Forward']
         ];
-        const pinStorageKey = 'insect-controller-channel-pins-v1';
+        const pinStorageKey = 'insect-controller-channel-pins-v2';
         let maxDurationMs = 4294967295;
+        let forwardDurationMs = 200;
+        let durationOverridden = false;
 
         ['Variable', 'Role', 'Output pin'].forEach(label => {
             const heading = document.createElement('span');
@@ -462,8 +527,9 @@ namespace ControllerPage
         video.addEventListener('load', () => setCameraState('online', 'Camera Online'));
         video.addEventListener('error', () => setCameraState('offline', 'Camera Connection Failed'));
 
-        function stimulation() {
-            const durationMs = Number(durationInput.value),
+        function stimulation(command) {
+            const configuredDurationMs = Number(durationInput.value),
+                durationMs = !durationOverridden && command === 'forward' ? forwardDurationMs : configuredDurationMs,
                 frequency = Number(frequencyInput.value);
             const phaseMs = Math.max(1, Math.round(500 / frequency));
             const valid = Number.isInteger(durationMs) && durationMs >= Number(durationInput.min) && durationMs <= maxDurationMs && Number.isFinite(frequency) && frequency >= Number(frequencyInput.min) && frequency <= Number(frequencyInput.max);
@@ -511,7 +577,10 @@ namespace ControllerPage
             updateSettingsInfo()
         }
 
-        durationInput.addEventListener('input', updateSettingsInfo);
+        durationInput.addEventListener('input', () => {
+            durationOverridden = true;
+            updateSettingsInfo()
+        });
         frequencyInput.addEventListener('input', updateSettingsInfo);
         pinGrid.addEventListener('change', () => {
             savePinMapping();
@@ -526,6 +595,65 @@ namespace ControllerPage
         function closeSettings() {
             settingsModal.hidden = true
         }
+
+        function setWifiStatus(message, error = false) {
+            wifiStatus.textContent = message;
+            wifiStatus.classList.toggle('error', error)
+        }
+
+        async function scanWifi() {
+            scanWifiButton.disabled = true;
+            setWifiStatus('Scanning nearby networks…');
+            try {
+                const response = await fetch('/wifi/networks', { cache: 'no-store' });
+                const result = await response.json();
+                if (!response.ok) throw Error(result.error || 'Wi-Fi scan failed');
+                wifiNetworks.replaceChildren();
+                result.networks.forEach(network => {
+                    const option = document.createElement('option');
+                    option.value = network.ssid;
+                    option.label = network.ssid + ' · ' + network.rssi + ' dBm' + (network.secure ? ' · secured' : ' · open');
+                    wifiNetworks.appendChild(option)
+                });
+                setWifiStatus(result.networks.length ? 'Select a network or type its SSID.' : 'No visible networks found. You can type a hidden SSID.')
+            } catch (error) {
+                setWifiStatus(error.message, true)
+            } finally {
+                scanWifiButton.disabled = false
+            }
+        }
+
+        async function joinWifi() {
+            const ssid = wifiSsid.value;
+            if (!ssid) {
+                setWifiStatus('Enter a Wi-Fi name.', true);
+                wifiSsid.focus();
+                return
+            }
+            scanWifiButton.disabled = true;
+            joinWifiButton.disabled = true;
+            setWifiStatus('Connecting… Keep this page open for up to 10 seconds.');
+            try {
+                const body = new URLSearchParams({ ssid, password: wifiPassword.value });
+                const response = await fetch('/wifi/connect', {
+                    method: 'POST',
+                    cache: 'no-store',
+                    headers: { 'Content-Type': 'application/x-www-form-urlencoded;charset=UTF-8' },
+                    body
+                });
+                const result = await response.json();
+                if (!response.ok) throw Error(result.error || 'Unable to join Wi-Fi');
+                video.src = '';
+                setWifiStatus('Connected. New board IP: ' + result.ip + '. The XIAO hotspot is closing; join the same Wi-Fi to continue.')
+            } catch (error) {
+                setWifiStatus(error.message, true);
+                scanWifiButton.disabled = false;
+                joinWifiButton.disabled = false
+            }
+        }
+
+        scanWifiButton.addEventListener('click', scanWifi);
+        joinWifiButton.addEventListener('click', joinWifi);
         document.getElementById('openSettings').addEventListener('click', openSettings);
         document.getElementById('closeSettings').addEventListener('click', closeSettings);
         document.getElementById('settingsBackdrop').addEventListener('click', closeSettings);
@@ -541,7 +669,7 @@ namespace ControllerPage
             }
             pins.forEach((pin, index) => url += '&chnl' + (index + 1) + '=' + pin);
             if (name !== 'stop') {
-                const w = stimulation();
+                const w = stimulation(name);
                 if (!w.valid) return Promise.resolve();
                 url += '&durationMs=' + w.durationMs + '&frequency=' + w.frequency
             }
@@ -562,12 +690,13 @@ namespace ControllerPage
             durationInput.min = c.minDurationMs;
             durationInput.max = c.maxDurationMs;
             durationInput.value = c.durationMs;
+            forwardDurationMs = Number(c.forwardDurationMs) || 200;
             frequencyInput.min = c.minFrequency;
             frequencyInput.max = c.maxFrequency;
             frequencyInput.step = '0.1';
             frequencyInput.value = c.frequency;
             maxDurationMs = c.maxDurationMs;
-            loadPinMapping(c.defaultPins || [7, 8, 9, 10])
+            loadPinMapping(c.defaultPins || [1, 2, 3, 4])
         }).catch(() => setCameraState('offline', 'Config Read Failed'));
         let active = null;
 

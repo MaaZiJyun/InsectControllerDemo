@@ -57,18 +57,63 @@ Example response:
   "networkMode": "station",
   "controlPort": 80,
   "videoPort": 81,
-  "durationMs": 500,
+  "durationMs": 400,
+  "forwardDurationMs": 200,
+  "defaultDurationsMs": {
+    "forward": 200,
+    "back": 400,
+    "left": 400,
+    "right": 400
+  },
   "frequency": 50.0,
   "minDurationMs": 1,
   "maxDurationMs": 4294967295,
   "minFrequency": 1.0,
   "maxFrequency": 500.0,
-  "defaultPins": [7, 8, 9, 10]
+  "defaultPins": [1, 2, 3, 4]
 }
 ```
 
 `networkMode` is `station` on a shared external LAN and `access-point` when the
 board created its fallback Wi-Fi network.
+
+## Onboard Wi-Fi setup
+
+These endpoints are available only while the board is running its fallback
+access point and are used by the onboard Settings page.
+
+Scan nearby networks:
+
+```text
+GET http://192.168.4.1/wifi/networks
+```
+
+Example response:
+
+```json
+{
+  "ok": true,
+  "networks": [
+    { "ssid": "Lab Wi-Fi", "rssi": -48, "secure": true }
+  ]
+}
+```
+
+Join a network using an `application/x-www-form-urlencoded` POST body. Keep the
+password out of the query string:
+
+```text
+POST http://192.168.4.1/wifi/connect
+Content-Type: application/x-www-form-urlencoded
+
+ssid=Lab+Wi-Fi&password=example-password
+```
+
+On success the response contains `ip` and `controlUrl`. The credentials are
+saved, and the fallback access point closes about 2.5 seconds after the response
+is sent. The client must join the same Wi-Fi and use UDP discovery or the
+returned IP. If association fails, the endpoint returns `504` and the access
+point remains active. Open networks may use an empty password.
 
 ## Sending control commands
 
@@ -88,9 +133,14 @@ All parameters are URL query parameters:
 | `durationMs` | movement only | `1`–`4294967295` | Maximum stimulation duration |
 | `frequency` | movement only | `1`–`500` | Bipolar waveform frequency in Hz |
 
-The four channel parameters may all be omitted to use `[7,8,9,10]`. If any one
+The four channel parameters may all be omitted to use `[1,2,3,4]` (D1–D4). If any one
 is supplied, all four must be supplied. They must be distinct. Their numeric
 values refer to XIAO labels (`7` means `D7`), not raw ESP32 GPIO numbers.
+
+If `frequency` is omitted, it defaults to `50 Hz`. If `durationMs` is omitted,
+`forward` defaults to `200 ms`, while `back`, `left`, and `right` default to
+`400 ms`. `durationMs` and `frequency` supplied by the client override these
+defaults.
 
 The electrical channel pairs are:
 
@@ -105,13 +155,13 @@ The electrical channel pairs are:
 Example:
 
 ```text
-POST http://192.168.1.42/command?name=left&chnl1=7&chnl2=8&chnl3=9&chnl4=10&durationMs=500&frequency=50
+POST http://192.168.1.42/command?name=left&chnl1=1&chnl2=2&chnl3=3&chnl4=4
 ```
 
 Success response:
 
 ```json
-{"ok":true,"durationMs":500,"phaseDurationMs":10}
+{"ok":true,"durationMs":400,"phaseDurationMs":10}
 ```
 
 Errors use HTTP `400` for invalid parameters and `503` when the command service
@@ -161,23 +211,19 @@ Example response:
   "vflip": true,
   "streamGeneration": 1,
   "supportedResolutions": [
-    "96x96", "160x120", "128x128", "176x144", "240x176",
-    "240x240", "320x240", "320x320", "400x296", "480x320",
-    "640x480", "800x600", "1024x768", "1280x720",
-    "1280x1024", "1600x1200", "1920x1080", "720x1280",
-    "864x1536", "2048x1536"
+    "2048x1536", "1920x1080", "1280x720",
+    "1024x768", "640x480", "320x240"
   ],
   "maxFpsByResolution": {
-    "320x240": 60,
-    "640x480": 30,
-    "800x600": 25,
-    "1280x720": 20,
-    "1600x1200": 15,
-    "1920x1080": 12,
-    "2048x1536": 10
+    "2048x1536": 15,
+    "1920x1080": 20,
+    "1280x720": 45,
+    "1024x768": 45,
+    "640x480": 60,
+    "320x240": 120
   },
   "limits": {
-    "fps": [1, 30],
+    "fps": [1, 60],
     "brightness": [-2, 2],
     "contrast": [-2, 2],
     "sharpness": [-2, 2]
@@ -185,11 +231,26 @@ Example response:
 }
 ```
 
-Always populate the resolution selector from `supportedResolutions`. This list
-is generated at runtime from the detected sensor PID and the largest frame
-buffer allocated at boot. OV2640, OV3660, and OV5640 therefore expose different
-lists. The firmware is built with OPI PSRAM, allocates buffers for the detected
-sensor maximum, then lowers the default output to `640x480`.
+Always populate the resolution selector from `supportedResolutions`. The stream
+API has a strict six-profile whitelist and intersects it at runtime with the
+detected sensor PID and largest frame buffer allocated at boot. Unsupported
+profiles are omitted. The firmware is built with OPI PSRAM, allocates buffers
+for the detected sensor maximum, then lowers the default output to `640x480`.
+
+For OV3660 the exposed profiles are:
+
+| Format | Resolution | FPS ceiling | Scaling method | Sensor system clock |
+| --- | ---: | ---: | --- | ---: |
+| 3 Megapixel | 2048×1536 | 15 | Full resolution | 54 MHz |
+| 1080p | 1920×1080 | 20 | Crop from full resolution | 54 MHz |
+| 720p | 1280×720 | 45 | Crop from full resolution | 54 MHz |
+| XGA | 1024×768 | 45 | Horizontal and vertical subsampling | 54 MHz |
+| VGA | 640×480 | 60 | Subsample from 1280×960 | 27 MHz |
+| QVGA | 320×240 | 120 | Subsample from 1280×960 | 27 MHz |
+
+These FPS and clock values describe the OV3660 sensor profiles. `fps` remains a
+stream transmission ceiling; the ESP32-S3 JPEG/DVP path, exposure, Wi-Fi, and
+browser can make the observed frame rate substantially lower.
 
 Update one or more values using URL query parameters:
 
@@ -307,14 +368,8 @@ video.src = `http://${boardIp}:81/stream?v=${Date.now()}`;
 
 `fps` is a transmission ceiling, not a guaranteed sensor frame rate. Actual
 rate depends on sensor model, exposure/light level, resolution, JPEG size, Wi-Fi
-signal quality, and browser JPEG decoding. For low-latency control, prefer
-`240x240` and keep only one `<img>` connected per board.
-
-On the tested XIAO ESP32S3 Sense with OV3660, the measured rates were about
-28 FPS at `240x240`, 27 FPS at `240x176`, 18 FPS at `320x240`, and 15–18 FPS
-from `400x296` through `640x480`. The firmware therefore boots in the measured
-smooth profile, `240x240` at a 30 FPS ceiling. Higher resolutions remain
-available when spatial detail is more important than motion smoothness.
+signal quality, and browser JPEG decoding. Keep only one `<img>` connected per
+board and select `320x240` when low latency is more important than detail.
 
 Single JPEG frame:
 

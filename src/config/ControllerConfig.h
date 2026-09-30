@@ -13,7 +13,8 @@ inline constexpr uint16_t VIDEO_PORT = 81;
 inline constexpr uint16_t DISCOVERY_PORT = 37020;
 
 inline constexpr uint16_t DEFAULT_PHASE_DURATION_MS = 10;
-inline constexpr uint32_t DEFAULT_DURATION_MS = 500;
+inline constexpr uint32_t DEFAULT_DURATION_MS = 400;
+inline constexpr uint32_t DEFAULT_FORWARD_DURATION_MS = 200;
 inline constexpr float DEFAULT_FREQUENCY_HZ = 50.0F;
 
 inline constexpr uint32_t MIN_DURATION_MS = 1;

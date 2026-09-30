@@ -26,6 +26,77 @@ QueueHandle_t commandQueue = nullptr;
 TaskHandle_t commandTaskHandle = nullptr;
 bool serverEnabled = false;
 
+void handleWifiNetworksRequest()
+{
+  if (!WifiComp::isAccessPointMode())
+  {
+    controlServer.send(403,
+                       "application/json",
+                       "{\"ok\":false,\"error\":\"Wi-Fi setup is only available in access-point mode\"}");
+    return;
+  }
+
+  String response;
+  response.reserve(1024);
+  if (!WifiComp::scanNetworks(response))
+  {
+    controlServer.send(500,
+                       "application/json",
+                       "{\"ok\":false,\"error\":\"Wi-Fi scan failed\"}");
+    return;
+  }
+
+  controlServer.sendHeader("Cache-Control", "no-store");
+  controlServer.send(200, "application/json", response);
+}
+
+void handleWifiConnectRequest()
+{
+  if (!WifiComp::isAccessPointMode())
+  {
+    controlServer.send(403,
+                       "application/json",
+                       "{\"ok\":false,\"error\":\"Wi-Fi setup is only available in access-point mode\"}");
+    return;
+  }
+  if (!controlServer.hasArg("ssid"))
+  {
+    controlServer.send(400,
+                       "application/json",
+                       "{\"ok\":false,\"error\":\"ssid is required\"}");
+    return;
+  }
+
+  const String ssid = controlServer.arg("ssid");
+  const String password = controlServer.hasArg("password")
+                              ? controlServer.arg("password")
+                              : String();
+  if (ssid.isEmpty() || ssid.length() > 32 || password.length() > 63)
+  {
+    controlServer.send(400,
+                       "application/json",
+                       "{\"ok\":false,\"error\":\"invalid SSID or password length\"}");
+    return;
+  }
+
+  IPAddress stationAddress;
+  if (!WifiComp::connectToExternalWifi(ssid, password, stationAddress))
+  {
+    controlServer.send(504,
+                       "application/json",
+                       "{\"ok\":false,\"error\":\"unable to join Wi-Fi; access point remains active\"}");
+    return;
+  }
+
+  String response = "{\"ok\":true,\"ip\":\"";
+  response += stationAddress.toString();
+  response += "\",\"controlUrl\":\"http://";
+  response += stationAddress.toString();
+  response += "/\",\"message\":\"joined; access point will close\"}";
+  controlServer.sendHeader("Cache-Control", "no-store");
+  controlServer.send(200, "application/json", response);
+}
+
 bool parseSignedSetting(const char *name, int8_t &value)
 {
   if (!controlServer.hasArg(name))
@@ -175,9 +246,9 @@ void handleCameraSettingsRequest()
     const String input = controlServer.arg("fps");
     char *end = nullptr;
     const unsigned long parsed = strtoul(input.c_str(), &end, 10);
-    if (end == input.c_str() || *end != '\0' || parsed < 1 || parsed > 60)
+    if (end == input.c_str() || *end != '\0' || parsed < 1 || parsed > 120)
     {
-      controlServer.send(400, "application/json", "{\"ok\":false,\"error\":\"fps must be between 1 and 60\"}");
+      controlServer.send(400, "application/json", "{\"ok\":false,\"error\":\"fps must be between 1 and 120\"}");
       return;
     }
     settings.fps = static_cast<uint8_t>(parsed);
@@ -338,11 +409,18 @@ bool parseCommand(const String &name, Command &command)
   return true;
 }
 
-bool parseDuration(uint32_t &durationMs)
+uint32_t defaultDurationFor(Command command)
+{
+  return command == Command::Forward
+             ? ControllerConfig::DEFAULT_FORWARD_DURATION_MS
+             : ControllerConfig::DEFAULT_DURATION_MS;
+}
+
+bool parseDuration(Command command, uint32_t &durationMs)
 {
   if (!controlServer.hasArg("durationMs"))
   {
-    durationMs = ControllerConfig::DEFAULT_DURATION_MS;
+    durationMs = defaultDurationFor(command);
     return true;
   }
 
@@ -497,7 +575,7 @@ void handleCommandRequest()
     return;
   }
 
-  uint32_t durationMs = ControllerConfig::DEFAULT_DURATION_MS;
+  uint32_t durationMs = defaultDurationFor(command);
   uint16_t phaseDurationMs = ControllerConfig::DEFAULT_PHASE_DURATION_MS;
   uint8_t channelPins[GPIOConfig::CHANNEL_COUNT] = {};
   if (!parseChannelPins(channelPins))
@@ -507,7 +585,7 @@ void handleCommandRequest()
   }
 
   if (command != Command::Stop &&
-      (!parseDuration(durationMs) || !parsePhaseDuration(phaseDurationMs)))
+      (!parseDuration(command, durationMs) || !parsePhaseDuration(phaseDurationMs)))
   {
     controlServer.send(400, "application/json", "{\"ok\":false,\"error\":\"invalid waveform settings\"}");
     return;
@@ -577,13 +655,18 @@ bool CommandService::enable()
                    });
   controlServer.on("/config", HTTP_GET, []()
                    {
-                     char response[384];
+                     char response[512];
                      snprintf(response,
                               sizeof(response),
-                              "{\"model\":\"XIAO ESP32S3 Sense\",\"networkMode\":\"%s\",\"controlPort\":%u,\"videoPort\":%u,\"durationMs\":%lu,\"frequency\":%.1f,\"minDurationMs\":%lu,\"maxDurationMs\":%lu,\"minFrequency\":%.1f,\"maxFrequency\":%.1f,\"defaultPins\":[%u,%u,%u,%u]}",
+                              "{\"model\":\"XIAO ESP32S3 Sense\",\"networkMode\":\"%s\",\"controlPort\":%u,\"videoPort\":%u,\"durationMs\":%lu,\"forwardDurationMs\":%lu,\"defaultDurationsMs\":{\"forward\":%lu,\"back\":%lu,\"left\":%lu,\"right\":%lu},\"frequency\":%.1f,\"minDurationMs\":%lu,\"maxDurationMs\":%lu,\"minFrequency\":%.1f,\"maxFrequency\":%.1f,\"defaultPins\":[%u,%u,%u,%u]}",
                               WifiComp::isAccessPointMode() ? "access-point" : "station",
                               ControllerConfig::CONTROL_PORT,
                               ControllerConfig::VIDEO_PORT,
+                              static_cast<unsigned long>(ControllerConfig::DEFAULT_DURATION_MS),
+                              static_cast<unsigned long>(ControllerConfig::DEFAULT_FORWARD_DURATION_MS),
+                              static_cast<unsigned long>(ControllerConfig::DEFAULT_FORWARD_DURATION_MS),
+                              static_cast<unsigned long>(ControllerConfig::DEFAULT_DURATION_MS),
+                              static_cast<unsigned long>(ControllerConfig::DEFAULT_DURATION_MS),
                               static_cast<unsigned long>(ControllerConfig::DEFAULT_DURATION_MS),
                               ControllerConfig::DEFAULT_FREQUENCY_HZ,
                               static_cast<unsigned long>(ControllerConfig::MIN_DURATION_MS),
@@ -606,6 +689,12 @@ bool CommandService::enable()
                    { controlServer.send(204); });
   controlServer.on("/camera/capture", HTTP_GET, handleCameraCaptureRequest);
   controlServer.on("/camera/capture", HTTP_OPTIONS, []()
+                   { controlServer.send(204); });
+  controlServer.on("/wifi/networks", HTTP_GET, handleWifiNetworksRequest);
+  controlServer.on("/wifi/networks", HTTP_OPTIONS, []()
+                   { controlServer.send(204); });
+  controlServer.on("/wifi/connect", HTTP_POST, handleWifiConnectRequest);
+  controlServer.on("/wifi/connect", HTTP_OPTIONS, []()
                    { controlServer.send(204); });
   controlServer.onNotFound([]()
                            { controlServer.send(404, "application/json", "{\"ok\":false,\"error\":\"not found\"}"); });

@@ -15,7 +15,4 @@ void BoardComp::enable()
   {
     pinMode(GPIOConfig::CONFIGURABLE_PINS[index], INPUT);
   }
-  pinMode(GPIOConfig::gpLed, OUTPUT); // Light
-
-  digitalWrite(GPIOConfig::gpLed, LOW);
 }

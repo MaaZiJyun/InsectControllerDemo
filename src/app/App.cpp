@@ -46,6 +46,7 @@ void App::begin(){
 /** @brief 推进刺激和 IMU 非阻塞任务，并向 Arduino 调度器让出执行时间。 */
 void App::update()
 {
+  WifiComp::update();
   CommandService::update();
   DiscoveryService::update();
 
