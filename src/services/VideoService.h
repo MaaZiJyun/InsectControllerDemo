@@ -8,6 +8,13 @@
 
 namespace VideoService
 {
+struct StreamStats
+{
+  bool active;
+  uint32_t streamId;
+  uint32_t framesSent;
+};
+
 /** @brief 在配置的视频端口启动实时流服务。 */
 bool enable();
 
@@ -28,4 +35,7 @@ bool isEnabled();
 
 /** @brief 每次视频服务成功启动后递增，供前端强制刷新 stream URL。 */
 uint32_t generation();
+
+/** @brief 原子读取当前 MJPEG 连接及完整发送帧累计数。 */
+StreamStats stats();
 }

@@ -26,6 +26,9 @@ volatile uint8_t activeStreamWorkers = 0;
 volatile int activeStreamSocket = -1;
 volatile bool pauseRequested = false;
 volatile uint8_t streamCameraUsers = 0;
+uint32_t publicStreamId = 0;
+uint32_t publicFramesSent = 0;
+bool publicStreamActive = false;
 portMUX_TYPE streamStateMux = portMUX_INITIALIZER_UNLOCKED;
 
 struct StreamTaskContext
@@ -133,6 +136,12 @@ void streamTask(void *parameter)
       if (result == ESP_OK)
       {
         ++sentFrames;
+        portENTER_CRITICAL(&streamStateMux);
+        if (activeStreamSession == session && publicStreamActive)
+        {
+          ++publicFramesSent;
+        }
+        portEXIT_CRITICAL(&streamStateMux);
       }
     }
 
@@ -189,6 +198,7 @@ void streamTask(void *parameter)
   if (activeStreamSession == session)
   {
     activeStreamSocket = -1;
+    publicStreamActive = false;
   }
   portEXIT_CRITICAL(&streamStateMux);
 
@@ -218,6 +228,12 @@ esp_err_t streamHandler(httpd_req_t *request)
   context->request = asyncRequest;
   context->session = ++activeStreamSession;
   activeStreamSocket = httpd_req_to_sockfd(asyncRequest);
+  if (++publicStreamId == 0)
+  {
+    ++publicStreamId;
+  }
+  publicFramesSent = 0;
+  publicStreamActive = true;
   ++activeStreamWorkers;
   portEXIT_CRITICAL(&streamStateMux);
 
@@ -248,6 +264,7 @@ esp_err_t streamHandler(httpd_req_t *request)
     if (activeStreamSession == session)
     {
       activeStreamSocket = -1;
+      publicStreamActive = false;
     }
     portEXIT_CRITICAL(&streamStateMux);
     return ESP_ERR_NO_MEM;
@@ -344,6 +361,7 @@ void VideoService::disable()
   portENTER_CRITICAL(&streamStateMux);
   ++activeStreamSession;
   streamSocket = activeStreamSocket;
+  publicStreamActive = false;
   portEXIT_CRITICAL(&streamStateMux);
 
   if (server != nullptr && streamSocket >= 0)
@@ -373,4 +391,15 @@ bool VideoService::isEnabled()
 uint32_t VideoService::generation()
 {
   return streamGeneration;
+}
+
+VideoService::StreamStats VideoService::stats()
+{
+  StreamStats snapshot = {};
+  portENTER_CRITICAL(&streamStateMux);
+  snapshot.active = publicStreamActive;
+  snapshot.streamId = publicStreamId;
+  snapshot.framesSent = publicFramesSent;
+  portEXIT_CRITICAL(&streamStateMux);
+  return snapshot;
 }

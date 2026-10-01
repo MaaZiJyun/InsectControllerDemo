@@ -26,6 +26,18 @@ QueueHandle_t commandQueue = nullptr;
 TaskHandle_t commandTaskHandle = nullptr;
 bool serverEnabled = false;
 
+bool rejectControllerRequestInAccessPointMode()
+{
+  if (!WifiComp::isAccessPointMode())
+  {
+    return false;
+  }
+  controlServer.send(403,
+                     "application/json",
+                     "{\"ok\":false,\"error\":\"only Wi-Fi setup is available in access-point mode\"}");
+  return true;
+}
+
 void handleWifiNetworksRequest()
 {
   if (!WifiComp::isAccessPointMode())
@@ -97,6 +109,25 @@ void handleWifiConnectRequest()
   controlServer.send(200, "application/json", response);
 }
 
+void handleStreamStatsRequest()
+{
+  if (rejectControllerRequestInAccessPointMode())
+  {
+    return;
+  }
+
+  const VideoService::StreamStats stats = VideoService::stats();
+  char response[112] = {};
+  snprintf(response,
+           sizeof(response),
+           "{\"active\":%s,\"stream_id\":%lu,\"frames_sent\":%lu}",
+           stats.active ? "true" : "false",
+           static_cast<unsigned long>(stats.streamId),
+           static_cast<unsigned long>(stats.framesSent));
+  controlServer.sendHeader("Cache-Control", "no-store");
+  controlServer.send(200, "application/json", response);
+}
+
 bool parseSignedSetting(const char *name, int8_t &value)
 {
   if (!controlServer.hasArg(name))
@@ -136,6 +167,11 @@ bool parseBooleanSetting(const char *name, bool &value)
 
 void sendCameraSettings()
 {
+  if (rejectControllerRequestInAccessPointMode())
+  {
+    return;
+  }
+
   CameraComp::Settings settings = {};
   if (!CameraComp::getSettings(settings))
   {
@@ -211,6 +247,11 @@ void sendCameraSettings()
 
 void handleCameraSettingsRequest()
 {
+  if (rejectControllerRequestInAccessPointMode())
+  {
+    return;
+  }
+
   CameraComp::Settings settings = {};
   if (!CameraComp::getSettings(settings))
   {
@@ -321,6 +362,11 @@ void handleCameraSettingsRequest()
 
 void handleCameraCaptureRequest()
 {
+  if (rejectControllerRequestInAccessPointMode())
+  {
+    return;
+  }
+
   if (!CameraComp::isEnabled())
   {
     controlServer.send(503, "application/json", "{\"ok\":false,\"error\":\"camera unavailable\"}");
@@ -565,8 +611,42 @@ void commandTask(void *)
   }
 }
 
+bool ensureCommandExecutor()
+{
+  if (commandQueue != nullptr && commandTaskHandle != nullptr)
+  {
+    return true;
+  }
+
+  commandQueue = xQueueCreate(1, sizeof(CommandRequest));
+  if (commandQueue == nullptr)
+  {
+    Serial.println("Failed to create command queue");
+    return false;
+  }
+
+  if (xTaskCreate(commandTask,
+                  "command-service",
+                  ControllerConfig::COMMAND_TASK_STACK_SIZE,
+                  nullptr,
+                  ControllerConfig::COMMAND_TASK_PRIORITY,
+                  &commandTaskHandle) != pdPASS)
+  {
+    vQueueDelete(commandQueue);
+    commandQueue = nullptr;
+    Serial.println("Failed to create command task");
+    return false;
+  }
+  return true;
+}
+
 void handleCommandRequest()
 {
+  if (rejectControllerRequestInAccessPointMode())
+  {
+    return;
+  }
+
   Command command;
   if (!controlServer.hasArg("name") ||
       !parseCommand(controlServer.arg("name"), command))
@@ -620,34 +700,13 @@ bool CommandService::enable()
     return true;
   }
 
-  BehaviorService::enable();
-  commandQueue = xQueueCreate(1, sizeof(CommandRequest));
-  if (commandQueue == nullptr)
-  {
-    Serial.println("Failed to create command queue");
-    return false;
-  }
-
-  if (xTaskCreate(commandTask,
-                  "command-service",
-                  ControllerConfig::COMMAND_TASK_STACK_SIZE,
-                  nullptr,
-                  ControllerConfig::COMMAND_TASK_PRIORITY,
-                  &commandTaskHandle) != pdPASS)
-  {
-    vQueueDelete(commandQueue);
-    commandQueue = nullptr;
-    Serial.println("Failed to create command task");
-    return false;
-  }
-
   controlServer.on("/", HTTP_GET, []()
                    {
                      if (!WifiComp::isAccessPointMode())
                      {
                        controlServer.send(404,
                                           "application/json",
-                                          "{\"ok\":false,\"error\":\"onboard controller is only available in access-point mode\"}");
+                                          "{\"ok\":false,\"error\":\"Wi-Fi setup page is only available in access-point mode\"}");
                        return;
                      }
                      controlServer.sendHeader("Cache-Control", "no-store");
@@ -655,6 +714,10 @@ bool CommandService::enable()
                    });
   controlServer.on("/config", HTTP_GET, []()
                    {
+                     if (rejectControllerRequestInAccessPointMode())
+                     {
+                       return;
+                     }
                      char response[512];
                      snprintf(response,
                               sizeof(response),
@@ -682,14 +745,29 @@ bool CommandService::enable()
                    });
   controlServer.on("/command", HTTP_POST, handleCommandRequest);
   controlServer.on("/command", HTTP_OPTIONS, []()
-                   { controlServer.send(204); });
+                   {
+                     if (!rejectControllerRequestInAccessPointMode())
+                       controlServer.send(204);
+                   });
   controlServer.on("/camera/settings", HTTP_GET, sendCameraSettings);
   controlServer.on("/camera/settings", HTTP_POST, handleCameraSettingsRequest);
   controlServer.on("/camera/settings", HTTP_OPTIONS, []()
-                   { controlServer.send(204); });
+                   {
+                     if (!rejectControllerRequestInAccessPointMode())
+                       controlServer.send(204);
+                   });
   controlServer.on("/camera/capture", HTTP_GET, handleCameraCaptureRequest);
   controlServer.on("/camera/capture", HTTP_OPTIONS, []()
-                   { controlServer.send(204); });
+                   {
+                     if (!rejectControllerRequestInAccessPointMode())
+                       controlServer.send(204);
+                   });
+  controlServer.on("/stream/stats", HTTP_GET, handleStreamStatsRequest);
+  controlServer.on("/stream/stats", HTTP_OPTIONS, []()
+                   {
+                     if (!rejectControllerRequestInAccessPointMode())
+                       controlServer.send(204);
+                   });
   controlServer.on("/wifi/networks", HTTP_GET, handleWifiNetworksRequest);
   controlServer.on("/wifi/networks", HTTP_OPTIONS, []()
                    { controlServer.send(204); });
@@ -702,7 +780,7 @@ bool CommandService::enable()
   controlServer.begin();
   serverEnabled = true;
 
-  Serial.printf("Controller started on port %u\n", ControllerConfig::CONTROL_PORT);
+  Serial.printf("HTTP service started on port %u\n", ControllerConfig::CONTROL_PORT);
   return true;
 }
 
@@ -716,6 +794,6 @@ void CommandService::update()
 
 bool CommandService::submit(const CommandRequest &request)
 {
-  return commandQueue != nullptr &&
+  return ensureCommandExecutor() &&
          xQueueOverwrite(commandQueue, &request) == pdPASS;
 }

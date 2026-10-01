@@ -151,7 +151,7 @@ namespace
             WiFi.setSleep(false);
             Serial.print("Access point IP: ");
             Serial.println(WiFi.softAPIP());
-            Serial.printf("Onboard controller URL: http://%s/\n",
+            Serial.printf("Wi-Fi setup URL: http://%s/\n",
                           WiFi.softAPIP().toString().c_str());
             return true;
         }

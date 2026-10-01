@@ -8,10 +8,10 @@
 
 namespace CommandService
 {
-/** @brief 启动控制页面 HTTP 服务和命令执行任务。 */
+/** @brief 启动配网/控制 HTTP 服务；刺激命令任务按需延迟创建。 */
 bool enable();
 
-/** @brief 在 Arduino loop 中处理控制页面 HTTP 请求。 */
+/** @brief 在 Arduino loop 中处理 HTTP 请求。 */
 void update();
 
 /** @brief 用包含波形参数的新命令覆盖当前缓存。 */

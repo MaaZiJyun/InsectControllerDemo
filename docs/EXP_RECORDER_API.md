@@ -80,7 +80,11 @@ board created its fallback Wi-Fi network.
 ## Onboard Wi-Fi setup
 
 These endpoints are available only while the board is running its fallback
-access point and are used by the onboard Settings page.
+access point and are used by the dedicated onboard Wi-Fi provisioning page.
+That page contains no controller, GPIO, stimulation, or camera functionality.
+While provisioning is active, `/config`, `/command`, and `/camera/*` return
+`403`; port `81` streaming and UDP discovery are not started. Those services
+start only after the board joins an existing Wi-Fi network.
 
 Scan nearby networks:
 
@@ -357,6 +361,32 @@ replaces and closes the previous stream instead of waiting behind a stale
 browser connection. Streaming runs in an asynchronous worker, uses the newest
 camera buffer, disables TCP Nagle buffering, and applies a bounded socket send
 timeout so a weak or disconnected client cannot freeze port 81.
+
+Read board-side delivery statistics from the control port:
+
+```text
+GET http://<board-ip>/stream/stats
+```
+
+```json
+{
+  "active": true,
+  "stream_id": 12,
+  "frames_sent": 1842
+}
+```
+
+`frames_sent` increments only after the boundary, part header, and complete
+JPEG payload have been successfully written to the active MJPEG connection.
+It remains available after the connection closes, while `active` becomes
+`false`. Every accepted `/stream` connection receives a new `stream_id` and
+starts from zero. The response uses `Cache-Control: no-store` and permits CORS.
+
+To calculate board-side FPS, poll once per second and divide the
+`frames_sent` delta by the real elapsed time. Reset the baseline when
+`stream_id` changes, the counter decreases, or `active` is false. This measures
+frames completely written by the board, not frames decoded or painted by the
+browser.
 
 Before replacing a stream URL in the frontend, clear the old image source and
 then assign a cache-busted URL:
