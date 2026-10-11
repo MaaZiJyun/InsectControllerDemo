@@ -372,12 +372,21 @@ GET http://<board-ip>/stream/stats
 {
   "active": true,
   "stream_id": 12,
-  "frames_sent": 1842
+  "frames_sent": 1842,
+  "jpeg_bytes_sent": 23946000,
+  "average_frame_bytes": 13000,
+  "capture_time_ms": 9210,
+  "send_time_ms": 48750
 }
 ```
 
-`frames_sent` increments only after the boundary, part header, and complete
-JPEG payload have been successfully written to the active MJPEG connection.
+`frames_sent` increments only after the combined boundary/part header and the
+complete JPEG payload have been successfully written to the active MJPEG
+connection. `jpeg_bytes_sent` counts only those completed JPEG payloads, while
+`average_frame_bytes` is `jpeg_bytes_sent / frames_sent`. `capture_time_ms` and
+`send_time_ms` are cumulative stage timings for diagnosing camera and network
+bottlenecks; a failed final send is included in `send_time_ms` even though it
+does not increment `frames_sent`.
 It remains available after the connection closes, while `active` becomes
 `false`. Every accepted `/stream` connection receives a new `stream_id` and
 starts from zero. The response uses `Cache-Control: no-store` and permits CORS.

@@ -117,13 +117,22 @@ void handleStreamStatsRequest()
   }
 
   const VideoService::StreamStats stats = VideoService::stats();
-  char response[112] = {};
+  const uint64_t averageFrameBytes = stats.framesSent == 0
+                                         ? 0
+                                         : stats.jpegBytesSent / stats.framesSent;
+  char response[256] = {};
   snprintf(response,
            sizeof(response),
-           "{\"active\":%s,\"stream_id\":%lu,\"frames_sent\":%lu}",
+           "{\"active\":%s,\"stream_id\":%lu,\"frames_sent\":%lu,"
+           "\"jpeg_bytes_sent\":%llu,\"average_frame_bytes\":%llu,"
+           "\"capture_time_ms\":%llu,\"send_time_ms\":%llu}",
            stats.active ? "true" : "false",
            static_cast<unsigned long>(stats.streamId),
-           static_cast<unsigned long>(stats.framesSent));
+           static_cast<unsigned long>(stats.framesSent),
+           static_cast<unsigned long long>(stats.jpegBytesSent),
+           static_cast<unsigned long long>(averageFrameBytes),
+           static_cast<unsigned long long>(stats.captureTimeMs),
+           static_cast<unsigned long long>(stats.sendTimeMs));
   controlServer.sendHeader("Cache-Control", "no-store");
   controlServer.send(200, "application/json", response);
 }

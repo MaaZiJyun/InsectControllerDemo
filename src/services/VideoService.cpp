@@ -14,6 +14,7 @@
 #include <freertos/task.h>
 #include <lwip/sockets.h>
 #include <lwip/tcp.h>
+#include <inttypes.h>
 #include <stdlib.h>
 
 namespace
@@ -28,6 +29,9 @@ volatile bool pauseRequested = false;
 volatile uint8_t streamCameraUsers = 0;
 uint32_t publicStreamId = 0;
 uint32_t publicFramesSent = 0;
+uint64_t publicJpegBytesSent = 0;
+uint64_t publicCaptureTimeMs = 0;
+uint64_t publicSendTimeMs = 0;
 bool publicStreamActive = false;
 portMUX_TYPE streamStateMux = portMUX_INITIALIZER_UNLOCKED;
 
@@ -38,8 +42,10 @@ struct StreamTaskContext
 };
 
 constexpr char STREAM_CONTENT_TYPE[] = "multipart/x-mixed-replace;boundary=frame";
-constexpr char STREAM_BOUNDARY[] = "\r\n--frame\r\n";
-constexpr char STREAM_PART[] = "Content-Type: image/jpeg\r\nContent-Length: %u\r\n\r\n";
+constexpr char STREAM_PART_HEADER[] =
+    "\r\n--frame\r\n"
+    "Content-Type: image/jpeg\r\n"
+    "Content-Length: %u\r\n\r\n";
 
 bool isCurrentStream(uint32_t session)
 {
@@ -68,10 +74,15 @@ void streamTask(void *parameter)
 
   uint32_t nextFrameAt = millis();
   uint32_t sentFrames = 0;
+  uint32_t capturedFrames = 0;
+  uint32_t sendAttempts = 0;
   uint32_t maximumCaptureMs = 0;
   uint32_t maximumSendMs = 0;
   uint32_t slowCaptureCount = 0;
   uint32_t slowSendCount = 0;
+  uint64_t totalCaptureMs = 0;
+  uint64_t totalSendMs = 0;
+  uint64_t totalJpegBytes = 0;
   while (result == ESP_OK && isCurrentStream(session))
   {
     bool mayUseCamera = false;
@@ -95,6 +106,7 @@ void streamTask(void *parameter)
     const uint32_t captureStartedAt = millis();
     camera_fb_t *frame = CameraComp::captureFrame();
     const uint32_t captureMs = millis() - captureStartedAt;
+    totalCaptureMs += captureMs;
     maximumCaptureMs = max(maximumCaptureMs, captureMs);
     if (captureMs >= 100)
     {
@@ -106,26 +118,38 @@ void streamTask(void *parameter)
     }
     else
     {
-      char header[80];
-      const int headerLength = snprintf(header,
-                                        sizeof(header),
-                                        STREAM_PART,
-                                        static_cast<unsigned int>(frame->len));
+      ++capturedFrames;
+      const size_t frameLength = frame->len;
+      // Send the boundary and MIME headers together. Keeping these in separate
+      // chunks creates two tiny TCP writes for every JPEG frame.
+      char partHeader[112];
+      const int partHeaderLength = snprintf(partHeader,
+                                            sizeof(partHeader),
+                                            STREAM_PART_HEADER,
+                                            static_cast<unsigned int>(frameLength));
 
       const uint32_t sendStartedAt = millis();
-      result = httpd_resp_send_chunk(request, STREAM_BOUNDARY, strlen(STREAM_BOUNDARY));
-      if (result == ESP_OK && headerLength > 0)
+      ++sendAttempts;
+      if (partHeaderLength <= 0 ||
+          static_cast<size_t>(partHeaderLength) >= sizeof(partHeader))
       {
-        result = httpd_resp_send_chunk(request, header, static_cast<size_t>(headerLength));
+        result = ESP_FAIL;
+      }
+      else
+      {
+        result = httpd_resp_send_chunk(request,
+                                       partHeader,
+                                       static_cast<size_t>(partHeaderLength));
       }
       if (result == ESP_OK)
       {
         result = httpd_resp_send_chunk(
             request,
             reinterpret_cast<const char *>(frame->buf),
-            frame->len);
+            frameLength);
       }
       const uint32_t sendMs = millis() - sendStartedAt;
+      totalSendMs += sendMs;
       maximumSendMs = max(maximumSendMs, sendMs);
       if (sendMs >= 100)
       {
@@ -133,13 +157,22 @@ void streamTask(void *parameter)
       }
 
       CameraComp::releaseFrame(frame);
+      portENTER_CRITICAL(&streamStateMux);
+      if (activeStreamSession == session && publicStreamActive)
+      {
+        publicCaptureTimeMs = totalCaptureMs;
+        publicSendTimeMs = totalSendMs;
+      }
+      portEXIT_CRITICAL(&streamStateMux);
       if (result == ESP_OK)
       {
         ++sentFrames;
+        totalJpegBytes += frameLength;
         portENTER_CRITICAL(&streamStateMux);
         if (activeStreamSession == session && publicStreamActive)
         {
           ++publicFramesSent;
+          publicJpegBytesSent = totalJpegBytes;
         }
         portEXIT_CRITICAL(&streamStateMux);
       }
@@ -172,18 +205,33 @@ void streamTask(void *parameter)
       // The camera or network missed the deadline. Drop schedule debt and ask
       // CAMERA_GRAB_LATEST for the newest available frame immediately.
       nextFrameAt = millis();
-      taskYIELD();
+      // Always block for at least one scheduler tick. taskYIELD() only yields
+      // to tasks of equal or higher priority and could starve Arduino loopTask.
+      vTaskDelay(pdMS_TO_TICKS(1));
     }
   }
 
-  Serial.printf("MJPEG session %lu ended: frames=%lu result=0x%04x current=%s "
-                "captureMax=%lums captureSlow=%lu sendMax=%lums sendSlow=%lu RSSI=%d\n",
+  const uint64_t averageFrameBytes = sentFrames == 0 ? 0 : totalJpegBytes / sentFrames;
+  const uint64_t averageCaptureMs = capturedFrames == 0 ? 0 : totalCaptureMs / capturedFrames;
+  const uint64_t averageSendMs = sendAttempts == 0 ? 0 : totalSendMs / sendAttempts;
+  Serial.printf("MJPEG session %lu ended: frames=%lu jpegBytes=%" PRIu64
+                " avgFrame=%" PRIu64 "B result=0x%04x current=%s "
+                "captureTotal=%" PRIu64 "ms captureAvg=%" PRIu64
+                "ms captureMax=%lums captureSlow=%lu "
+                "sendTotal=%" PRIu64 "ms sendAvg=%" PRIu64
+                "ms sendMax=%lums sendSlow=%lu RSSI=%d\n",
                 static_cast<unsigned long>(session),
                 static_cast<unsigned long>(sentFrames),
+                totalJpegBytes,
+                averageFrameBytes,
                 static_cast<unsigned int>(result),
                 isCurrentStream(session) ? "true" : "false",
+                totalCaptureMs,
+                averageCaptureMs,
                 static_cast<unsigned long>(maximumCaptureMs),
                 static_cast<unsigned long>(slowCaptureCount),
+                totalSendMs,
+                averageSendMs,
                 static_cast<unsigned long>(maximumSendMs),
                 static_cast<unsigned long>(slowSendCount),
                 WiFi.RSSI());
@@ -233,6 +281,9 @@ esp_err_t streamHandler(httpd_req_t *request)
     ++publicStreamId;
   }
   publicFramesSent = 0;
+  publicJpegBytesSent = 0;
+  publicCaptureTimeMs = 0;
+  publicSendTimeMs = 0;
   publicStreamActive = true;
   ++activeStreamWorkers;
   portEXIT_CRITICAL(&streamStateMux);
@@ -250,7 +301,7 @@ esp_err_t streamHandler(httpd_req_t *request)
                               "mjpeg-stream",
                               8192,
                               context,
-                              2,
+                              1,
                               &task,
                               1) != pdPASS)
   {
@@ -291,7 +342,9 @@ bool VideoService::enable()
   config.max_open_sockets = 4;
   config.lru_purge_enable = true;
   config.stack_size = 8192;
-  config.send_wait_timeout = 5;
+  // Abort a stalled client promptly instead of letting one JPEG hold the
+  // framebuffer and stream worker for several seconds.
+  config.send_wait_timeout = 2;
   config.recv_wait_timeout = 1;
 
   stopRequested = false;
@@ -336,9 +389,9 @@ bool VideoService::pauseForCameraChange()
   pauseRequested = true;
   portEXIT_CRITICAL(&streamStateMux);
 
-  // A send can wait for the configured five-second socket timeout. Usually the
-  // current small frame finishes immediately; this bound handles a broken link.
-  for (uint16_t attempt = 0; attempt < 550 && streamCameraUsers > 0; ++attempt)
+  // A send can wait for the configured two-second socket timeout. Leave a
+  // small margin so camera changes never race an in-flight frame.
+  for (uint16_t attempt = 0; attempt < 250 && streamCameraUsers > 0; ++attempt)
   {
     delay(10);
   }
@@ -371,7 +424,7 @@ void VideoService::disable()
 
   // The worker normally exits immediately after its socket is closed. Bound
   // the wait so camera reconfiguration never races a frame still being sent.
-  for (uint16_t attempt = 0; attempt < 550 && activeStreamWorkers > 0; ++attempt)
+  for (uint16_t attempt = 0; attempt < 250 && activeStreamWorkers > 0; ++attempt)
   {
     delay(10);
   }
@@ -400,6 +453,9 @@ VideoService::StreamStats VideoService::stats()
   snapshot.active = publicStreamActive;
   snapshot.streamId = publicStreamId;
   snapshot.framesSent = publicFramesSent;
+  snapshot.jpegBytesSent = publicJpegBytesSent;
+  snapshot.captureTimeMs = publicCaptureTimeMs;
+  snapshot.sendTimeMs = publicSendTimeMs;
   portEXIT_CRITICAL(&streamStateMux);
   return snapshot;
 }

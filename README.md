@@ -9,7 +9,7 @@ When the board joins the same Wi-Fi network as Exp.-Recorder, it exposes:
 - `POST http://<board-ip>/command?...` for stimulation commands.
 - `GET/POST http://<board-ip>/camera/settings` for camera configuration.
 - `GET http://<board-ip>:81/stream` for the MJPEG camera stream.
-- `GET http://<board-ip>/stream/stats` for the active stream ID and completed-frame count.
+- `GET http://<board-ip>/stream/stats` for completed-frame, JPEG-byte, capture-time, and send-time counters.
 - `GET http://<board-ip>/camera/capture` for a maximum-resolution JPEG photo.
 - The default live-video profile is `640x480 @ 30 FPS`;
   still photos continue to use the sensor's maximum supported resolution.

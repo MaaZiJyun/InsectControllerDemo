@@ -60,7 +60,10 @@ namespace CameraConfig
             // Allocate for the largest planned runtime resolution. The sensor
             // is lowered to the requested output size after initialization.
             config.frame_size = allocationFrameSize;
-            config.jpeg_quality = 12;
+            // A lower numeric value means higher JPEG quality and a larger
+            // frame. 18 keeps VGA readable while substantially reducing the
+            // amount of data that must pass through the small lwIP TCP window.
+            config.jpeg_quality = 18;
             config.fb_count = 2;
             config.grab_mode = CAMERA_GRAB_LATEST;
             config.fb_location = CAMERA_FB_IN_PSRAM;
