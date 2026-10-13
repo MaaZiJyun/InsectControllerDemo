@@ -57,20 +57,15 @@ Example response:
   "networkMode": "station",
   "controlPort": 80,
   "videoPort": 81,
-  "durationMs": 400,
-  "forwardDurationMs": 200,
-  "defaultDurationsMs": {
-    "forward": 200,
-    "back": 400,
-    "left": 400,
-    "right": 400
-  },
-  "frequency": 50.0,
-  "minDurationMs": 1,
-  "maxDurationMs": 4294967295,
-  "minFrequency": 1.0,
-  "maxFrequency": 500.0,
-  "defaultPins": [1, 2, 3, 4]
+  "stimulation": {
+    "startPath": "/stimulation/start",
+    "stopPath": "/stimulation/stop",
+    "supportedPins": [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10],
+    "minDurationMs": 1,
+    "maxDurationMs": 4294967295,
+    "minFrequencyHz": 1.0,
+    "maxFrequencyHz": 500.0
+  }
 }
 ```
 
@@ -82,7 +77,7 @@ board created its fallback Wi-Fi network.
 These endpoints are available only while the board is running its fallback
 access point and are used by the dedicated onboard Wi-Fi provisioning page.
 That page contains no controller, GPIO, stimulation, or camera functionality.
-While provisioning is active, `/config`, `/command`, and `/camera/*` return
+While provisioning is active, `/config`, `/stimulation/*`, and `/camera/*` return
 `403`; port `81` streaming and UDP discovery are not started. Those services
 start only after the board joins an existing Wi-Fi network.
 
@@ -119,53 +114,35 @@ is sent. The client must join the same Wi-Fi and use UDP discovery or the
 returned IP. If association fails, the endpoint returns `504` and the access
 point remains active. Open networks may use an empty password.
 
-## Sending control commands
+## Starting stimulation
 
-```text
-POST http://<board-ip>/command
+```http
+POST http://<board-ip>/stimulation/start
+Content-Type: application/json
+
+{
+  "pin1": 1,
+  "pin2": 3,
+  "frequencyHz": 50,
+  "durationMs": 300
+}
 ```
 
-All parameters are URL query parameters:
+All four fields are required. Pin numbers refer to XIAO labels D0–D10 rather
+than raw ESP32 GPIO numbers, and `pin1` must differ from `pin2`. Frequency must
+be 1–500 Hz and duration must be 1–4294967295 ms.
 
-| Parameter | Required | Values | Meaning |
-| --- | --- | --- | --- |
-| `name` | yes | `forward`, `back`, `left`, `right`, `stop` | Command |
-| `chnl1` | together | integer `0`–`10` | Common/ground channel |
-| `chnl2` | together | integer `0`–`10` | Right channel |
-| `chnl3` | together | integer `0`–`10` | Left channel |
-| `chnl4` | together | integer `0`–`10` | Forward/back channel |
-| `durationMs` | movement only | `1`–`4294967295` | Maximum stimulation duration |
-| `frequency` | movement only | `1`–`500` | Bipolar waveform frequency in Hz |
+The differential waveform has fixed ordering:
 
-The four channel parameters may all be omitted to use `[1,2,3,4]` (D1–D4). If any one
-is supplied, all four must be supplied. They must be distinct. Their numeric
-values refer to XIAO labels (`7` means `D7`), not raw ESP32 GPIO numbers.
+1. First phase: `pin1=LOW`, `pin2=HIGH`.
+2. Second phase: `pin1=HIGH`, `pin2=LOW`.
+3. Repeat until `durationMs` expires.
 
-If `frequency` is omitted, it defaults to `50 Hz`. If `durationMs` is omitted,
-`forward` defaults to `200 ms`, while `back`, `left`, and `right` default to
-`400 ms`. `durationMs` and `frequency` supplied by the client override these
-defaults.
-
-The electrical channel pairs are:
-
-| Command | Active pair | Other configured channels |
-| --- | --- | --- |
-| `forward` | Chnl1 ↔ Chnl4 | high impedance |
-| `back` | Chnl1 ↔ Chnl4 | high impedance |
-| `left` | Chnl1 ↔ Chnl3 | high impedance |
-| `right` | Chnl1 ↔ Chnl2 | high impedance |
-| `stop` | none | all D0–D10 set to input/high impedance |
-
-Example:
-
-```text
-POST http://192.168.1.42/command?name=left&chnl1=1&chnl2=2&chnl3=3&chnl4=4
-```
-
-Success response:
+Every other stimulation pin is kept in input/high-impedance mode. The endpoint
+returns `202 Accepted` after the request has been queued:
 
 ```json
-{"ok":true,"durationMs":400,"phaseDurationMs":10}
+{"ok":true,"pin1":1,"pin2":3,"frequencyHz":50.000,"durationMs":300}
 ```
 
 Errors use HTTP `400` for invalid parameters and `503` when the command service
@@ -176,12 +153,13 @@ is unavailable. The response body contains `{"ok":false,"error":"..."}`.
 Send the following request when a pointer/key is released, cancelled, leaves the
 button, the browser loses focus, or the controller component unmounts:
 
-```text
-POST http://<board-ip>/command?name=stop
+```http
+POST http://<board-ip>/stimulation/stop
 ```
 
 The firmware also stops automatically after `durationMs`. A newly received
-command replaces the queued/current command.
+start request first returns the active pair to high impedance and then starts
+the new pair. Stop also restores every D0–D10 stimulation pin to high impedance.
 
 ## Camera
 
@@ -455,33 +433,24 @@ For a React page, set the stream URL directly as the `<img src>` value.
 ## Browser example
 
 ```ts
-type Movement = "forward" | "back" | "left" | "right";
-
-const channelPins = { chnl1: 7, chnl2: 8, chnl3: 9, chnl4: 10 };
-
-export async function move(
+export async function startStimulation(
   boardIp: string,
-  name: Movement,
+  pin1: number,
+  pin2: number,
   durationMs: number,
-  frequency: number,
+  frequencyHz: number,
 ) {
-  const query = new URLSearchParams({
-    name,
-    durationMs: String(durationMs),
-    frequency: String(frequency),
-    ...Object.fromEntries(
-      Object.entries(channelPins).map(([key, value]) => [key, String(value)]),
-    ),
-  });
-  const response = await fetch(`http://${boardIp}/command?${query}`, {
+  const response = await fetch(`http://${boardIp}/stimulation/start`, {
     method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ pin1, pin2, frequencyHz, durationMs }),
   });
   if (!response.ok) throw new Error(await response.text());
   return response.json();
 }
 
 export function stop(boardIp: string) {
-  return fetch(`http://${boardIp}/command?name=stop`, {
+  return fetch(`http://${boardIp}/stimulation/stop`, {
     method: "POST",
     keepalive: true,
   });
@@ -490,6 +459,6 @@ export function stop(boardIp: string) {
 
 The board sends permissive CORS response headers. If Exp.-Recorder is served over
 HTTPS, browsers will block direct HTTP board calls as mixed content; in that
-deployment, proxy `/config` and `/command` through the Exp.-Recorder FastAPI
+deployment, proxy `/config` and `/stimulation/*` through the Exp.-Recorder FastAPI
 backend. The current local Next.js development server uses HTTP and can call the
 board directly.

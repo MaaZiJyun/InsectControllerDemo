@@ -4,7 +4,7 @@
  */
 #include "CommandService.h"
 
-#include "BehaviorService.h"
+#include "StimulationService.h"
 #include "VideoService.h"
 #include "../components/CameraComp.h"
 #include "../components/WifiComp.h"
@@ -14,16 +14,13 @@
 
 #include <Arduino.h>
 #include <WebServer.h>
+#include <ctype.h>
+#include <errno.h>
 #include <math.h>
-#include <freertos/FreeRTOS.h>
-#include <freertos/queue.h>
-#include <freertos/task.h>
 
 namespace
 {
 WebServer controlServer(ControllerConfig::CONTROL_PORT);
-QueueHandle_t commandQueue = nullptr;
-TaskHandle_t commandTaskHandle = nullptr;
 bool serverEnabled = false;
 
 bool rejectControllerRequestInAccessPointMode()
@@ -447,258 +444,143 @@ void handleCameraCaptureRequest()
   CameraComp::releaseSnapshot(jpeg);
 }
 
-bool parseCommand(const String &name, Command &command)
+bool extractJsonNumber(const String &json, const char *name, String &value)
 {
-  if (name == "stop")
-    command = Command::Stop;
-  else if (name == "forward")
-    command = Command::Forward;
-  else if (name == "back")
-    command = Command::Back;
-  else if (name == "left")
-    command = Command::Left;
-  else if (name == "right")
-    command = Command::Right;
-  else
-    return false;
-  return true;
-}
-
-uint32_t defaultDurationFor(Command command)
-{
-  return command == Command::Forward
-             ? ControllerConfig::DEFAULT_FORWARD_DURATION_MS
-             : ControllerConfig::DEFAULT_DURATION_MS;
-}
-
-bool parseDuration(Command command, uint32_t &durationMs)
-{
-  if (!controlServer.hasArg("durationMs"))
-  {
-    durationMs = defaultDurationFor(command);
-    return true;
-  }
-
-  const String value = controlServer.arg("durationMs");
-  char *end = nullptr;
-  const unsigned long long parsed = strtoull(value.c_str(), &end, 10);
-  if (end == value.c_str() || *end != '\0' ||
-      parsed < ControllerConfig::MIN_DURATION_MS ||
-      parsed > ControllerConfig::MAX_DURATION_MS)
+  const String marker = String('"') + name + '"';
+  const int keyAt = json.indexOf(marker);
+  if (keyAt < 0 || json.indexOf(marker, keyAt + marker.length()) >= 0)
   {
     return false;
   }
 
-  durationMs = static_cast<uint32_t>(parsed);
-  return true;
-}
-
-bool parsePhaseDuration(uint16_t &phaseDurationMs)
-{
-  if (!controlServer.hasArg("frequency"))
-  {
-    phaseDurationMs = ControllerConfig::DEFAULT_PHASE_DURATION_MS;
-    return true;
-  }
-
-  const String value = controlServer.arg("frequency");
-  char *end = nullptr;
-  const float frequency = strtof(value.c_str(), &end);
-  if (end == value.c_str() || *end != '\0' || !isfinite(frequency) ||
-      frequency < ControllerConfig::MIN_FREQUENCY_HZ ||
-      frequency > ControllerConfig::MAX_FREQUENCY_HZ)
-  {
+  int cursor = keyAt + marker.length();
+  while (cursor < json.length() && isspace(static_cast<unsigned char>(json[cursor])))
+    ++cursor;
+  if (cursor >= json.length() || json[cursor++] != ':')
     return false;
-  }
+  while (cursor < json.length() && isspace(static_cast<unsigned char>(json[cursor])))
+    ++cursor;
 
-  phaseDurationMs = static_cast<uint16_t>(lroundf(500.0F / frequency));
-  if (phaseDurationMs == 0)
+  const int numberAt = cursor;
+  while (cursor < json.length())
   {
-    phaseDurationMs = 1;
-  }
-  return true;
-}
-
-bool parseChannelPins(uint8_t channelPins[GPIOConfig::CHANNEL_COUNT])
-{
-  static const char *ARG_NAMES[GPIOConfig::CHANNEL_COUNT] = {
-      "chnl1", "chnl2", "chnl3", "chnl4"};
-
-  bool hasAnyPin = false;
-  for (uint8_t index = 0; index < GPIOConfig::CHANNEL_COUNT; ++index)
-  {
-    hasAnyPin = hasAnyPin || controlServer.hasArg(ARG_NAMES[index]);
-  }
-
-  for (uint8_t index = 0; index < GPIOConfig::CHANNEL_COUNT; ++index)
-  {
-    if (!hasAnyPin)
-    {
-      channelPins[index] = static_cast<uint8_t>(GPIOConfig::DEFAULT_CHANNEL_PINS[index]);
-      continue;
-    }
-    if (!controlServer.hasArg(ARG_NAMES[index]))
-    {
-      return false;
-    }
-
-    const String value = controlServer.arg(ARG_NAMES[index]);
-    char *end = nullptr;
-    const unsigned long pinIndex = strtoul(value.c_str(), &end, 10);
-    if (end == value.c_str() || *end != '\0' || pinIndex >= GPIOConfig::PIN_OPTION_COUNT)
-    {
-      return false;
-    }
-
-    const uint8_t pin = static_cast<uint8_t>(
-        GPIOConfig::pinForIndex(static_cast<uint8_t>(pinIndex)));
-    for (uint8_t previous = 0; previous < index; ++previous)
-    {
-      if (channelPins[previous] == pin)
-      {
-        return false;
-      }
-    }
-    channelPins[index] = pin;
-  }
-  return true;
-}
-
-void executeCommand(CommandRequest request)
-{
-  if (request.command == Command::Stop)
-  {
-    BehaviorService::stop();
-    return;
-  }
-
-  unsigned long startedAt = millis();
-  bool reversePolarity = false;
-
-  while (request.command != Command::Stop &&
-         millis() - startedAt < request.durationMs)
-  {
-    if (!BehaviorService::applyPhase(request.command,
-                                     request.channelPins,
-                                     reversePolarity))
+    const char character = json[cursor];
+    if (!(isdigit(static_cast<unsigned char>(character)) ||
+          character == '+' || character == '-' || character == '.' ||
+          character == 'e' || character == 'E'))
     {
       break;
     }
-    reversePolarity = !reversePolarity;
-
-    const uint32_t elapsedMs = millis() - startedAt;
-    const uint32_t remainingMs = elapsedMs < request.durationMs
-                                     ? request.durationMs - elapsedMs
-                                     : 0;
-    const uint32_t waitMs = min(static_cast<uint32_t>(request.phaseDurationMs),
-                                remainingMs);
-
-    CommandRequest replacement;
-    if (xQueueReceive(commandQueue,
-                      &replacement,
-                      pdMS_TO_TICKS(waitMs)) == pdTRUE)
-    {
-      request = replacement;
-      startedAt = millis();
-      reversePolarity = false;
-      continue;
-    }
+    ++cursor;
   }
-
-  BehaviorService::stop();
-}
-
-void commandTask(void *)
-{
-  CommandRequest request;
-  for (;;)
-  {
-    if (xQueueReceive(commandQueue, &request, portMAX_DELAY) == pdTRUE)
-    {
-      executeCommand(request);
-    }
-  }
-}
-
-bool ensureCommandExecutor()
-{
-  if (commandQueue != nullptr && commandTaskHandle != nullptr)
-  {
-    return true;
-  }
-
-  commandQueue = xQueueCreate(1, sizeof(CommandRequest));
-  if (commandQueue == nullptr)
-  {
-    Serial.println("Failed to create command queue");
+  if (cursor == numberAt)
     return false;
-  }
 
-  if (xTaskCreate(commandTask,
-                  "command-service",
-                  ControllerConfig::COMMAND_TASK_STACK_SIZE,
-                  nullptr,
-                  ControllerConfig::COMMAND_TASK_PRIORITY,
-                  &commandTaskHandle) != pdPASS)
-  {
-    vQueueDelete(commandQueue);
-    commandQueue = nullptr;
-    Serial.println("Failed to create command task");
-    return false;
-  }
+  value = json.substring(numberAt, cursor);
   return true;
 }
 
-void handleCommandRequest()
+bool parseUnsigned(const String &input, uint32_t maximum, uint32_t &value)
+{
+  if (input.isEmpty() || input[0] == '-' || input[0] == '+')
+    return false;
+
+  errno = 0;
+  char *end = nullptr;
+  const unsigned long long parsed = strtoull(input.c_str(), &end, 10);
+  if (errno == ERANGE || end == input.c_str() || *end != '\0' || parsed > maximum)
+    return false;
+
+  value = static_cast<uint32_t>(parsed);
+  return true;
+}
+
+bool parseFrequency(const String &input, float &value)
+{
+  errno = 0;
+  char *end = nullptr;
+  const float parsed = strtof(input.c_str(), &end);
+  if (errno == ERANGE || end == input.c_str() || *end != '\0' || !isfinite(parsed))
+    return false;
+  value = parsed;
+  return true;
+}
+
+void handleStimulationStartRequest()
 {
   if (rejectControllerRequestInAccessPointMode())
+    return;
+
+  String json = controlServer.arg("plain");
+  json.trim();
+  String pin1Input;
+  String pin2Input;
+  String frequencyInput;
+  String durationInput;
+  if (json.length() < 2 || json[0] != '{' || json[json.length() - 1] != '}' ||
+      !extractJsonNumber(json, "pin1", pin1Input) ||
+      !extractJsonNumber(json, "pin2", pin2Input) ||
+      !extractJsonNumber(json, "frequencyHz", frequencyInput) ||
+      !extractJsonNumber(json, "durationMs", durationInput))
   {
+    controlServer.send(400, "application/json",
+                       "{\"ok\":false,\"error\":\"pin1, pin2, frequencyHz and durationMs are required JSON numbers\"}");
     return;
   }
 
-  Command command;
-  if (!controlServer.hasArg("name") ||
-      !parseCommand(controlServer.arg("name"), command))
+  uint32_t pin1 = 0;
+  uint32_t pin2 = 0;
+  uint32_t durationMs = 0;
+  float frequencyHz = 0.0F;
+  if (!parseUnsigned(pin1Input, GPIOConfig::PIN_OPTION_COUNT - 1, pin1) ||
+      !parseUnsigned(pin2Input, GPIOConfig::PIN_OPTION_COUNT - 1, pin2) ||
+      pin1 == pin2 ||
+      !parseUnsigned(durationInput, ControllerConfig::MAX_DURATION_MS, durationMs) ||
+      durationMs < ControllerConfig::MIN_DURATION_MS ||
+      !parseFrequency(frequencyInput, frequencyHz) ||
+      frequencyHz < ControllerConfig::MIN_FREQUENCY_HZ ||
+      frequencyHz > ControllerConfig::MAX_FREQUENCY_HZ)
   {
-    controlServer.send(400, "application/json", "{\"ok\":false,\"error\":\"invalid command\"}");
+    controlServer.send(400, "application/json",
+                       "{\"ok\":false,\"error\":\"invalid stimulation parameters\"}");
     return;
   }
 
-  uint32_t durationMs = defaultDurationFor(command);
-  uint16_t phaseDurationMs = ControllerConfig::DEFAULT_PHASE_DURATION_MS;
-  uint8_t channelPins[GPIOConfig::CHANNEL_COUNT] = {};
-  if (!parseChannelPins(channelPins))
+  if (!StimulationService::startStimulation(static_cast<uint8_t>(pin1),
+                                             static_cast<uint8_t>(pin2),
+                                             frequencyHz,
+                                             durationMs))
   {
-    controlServer.send(400, "application/json", "{\"ok\":false,\"error\":\"invalid or duplicate channel pins\"}");
-    return;
-  }
-
-  if (command != Command::Stop &&
-      (!parseDuration(command, durationMs) || !parsePhaseDuration(phaseDurationMs)))
-  {
-    controlServer.send(400, "application/json", "{\"ok\":false,\"error\":\"invalid waveform settings\"}");
-    return;
-  }
-
-  CommandRequest request = {command, durationMs, phaseDurationMs, {}};
-  for (uint8_t index = 0; index < GPIOConfig::CHANNEL_COUNT; ++index)
-  {
-    request.channelPins[index] = channelPins[index];
-  }
-  if (!CommandService::submit(request))
-  {
-    controlServer.send(503, "application/json", "{\"ok\":false,\"error\":\"command service unavailable\"}");
+    controlServer.send(503, "application/json",
+                       "{\"ok\":false,\"error\":\"stimulation service unavailable\"}");
     return;
   }
 
   controlServer.sendHeader("Cache-Control", "no-store");
-  char response[112];
+  char response[160] = {};
   snprintf(response,
            sizeof(response),
-           "{\"ok\":true,\"durationMs\":%lu,\"phaseDurationMs\":%u}",
-           static_cast<unsigned long>(durationMs),
-           phaseDurationMs);
-  controlServer.send(200, "application/json", response);
+           "{\"ok\":true,\"pin1\":%lu,\"pin2\":%lu,\"frequencyHz\":%.3f,\"durationMs\":%lu}",
+           static_cast<unsigned long>(pin1),
+           static_cast<unsigned long>(pin2),
+           frequencyHz,
+           static_cast<unsigned long>(durationMs));
+  controlServer.send(202, "application/json", response);
+}
+
+void handleStimulationStopRequest()
+{
+  if (rejectControllerRequestInAccessPointMode())
+    return;
+
+  if (!StimulationService::stopStimulation())
+  {
+    controlServer.send(503, "application/json",
+                       "{\"ok\":false,\"error\":\"stimulation service unavailable\"}");
+    return;
+  }
+  controlServer.sendHeader("Cache-Control", "no-store");
+  controlServer.send(202, "application/json", "{\"ok\":true}");
 }
 } // namespace
 
@@ -727,33 +609,28 @@ bool CommandService::enable()
                      {
                        return;
                      }
-                     char response[512];
+                     char response[384];
                      snprintf(response,
                               sizeof(response),
-                              "{\"model\":\"XIAO ESP32S3 Sense\",\"networkMode\":\"%s\",\"controlPort\":%u,\"videoPort\":%u,\"durationMs\":%lu,\"forwardDurationMs\":%lu,\"defaultDurationsMs\":{\"forward\":%lu,\"back\":%lu,\"left\":%lu,\"right\":%lu},\"frequency\":%.1f,\"minDurationMs\":%lu,\"maxDurationMs\":%lu,\"minFrequency\":%.1f,\"maxFrequency\":%.1f,\"defaultPins\":[%u,%u,%u,%u]}",
+                              "{\"model\":\"XIAO ESP32S3 Sense\",\"networkMode\":\"%s\",\"controlPort\":%u,\"videoPort\":%u,\"stimulation\":{\"startPath\":\"/stimulation/start\",\"stopPath\":\"/stimulation/stop\",\"supportedPins\":[0,1,2,3,4,5,6,7,8,9,10],\"minDurationMs\":%lu,\"maxDurationMs\":%lu,\"minFrequencyHz\":%.1f,\"maxFrequencyHz\":%.1f}}",
                               WifiComp::isAccessPointMode() ? "access-point" : "station",
                               ControllerConfig::CONTROL_PORT,
                               ControllerConfig::VIDEO_PORT,
-                              static_cast<unsigned long>(ControllerConfig::DEFAULT_DURATION_MS),
-                              static_cast<unsigned long>(ControllerConfig::DEFAULT_FORWARD_DURATION_MS),
-                              static_cast<unsigned long>(ControllerConfig::DEFAULT_FORWARD_DURATION_MS),
-                              static_cast<unsigned long>(ControllerConfig::DEFAULT_DURATION_MS),
-                              static_cast<unsigned long>(ControllerConfig::DEFAULT_DURATION_MS),
-                              static_cast<unsigned long>(ControllerConfig::DEFAULT_DURATION_MS),
-                              ControllerConfig::DEFAULT_FREQUENCY_HZ,
                               static_cast<unsigned long>(ControllerConfig::MIN_DURATION_MS),
                               static_cast<unsigned long>(ControllerConfig::MAX_DURATION_MS),
                               ControllerConfig::MIN_FREQUENCY_HZ,
-                              ControllerConfig::MAX_FREQUENCY_HZ,
-                              GPIOConfig::DEFAULT_CHANNEL_INDICES[0],
-                              GPIOConfig::DEFAULT_CHANNEL_INDICES[1],
-                              GPIOConfig::DEFAULT_CHANNEL_INDICES[2],
-                              GPIOConfig::DEFAULT_CHANNEL_INDICES[3]);
+                              ControllerConfig::MAX_FREQUENCY_HZ);
                      controlServer.sendHeader("Cache-Control", "no-store");
                      controlServer.send(200, "application/json", response);
                    });
-  controlServer.on("/command", HTTP_POST, handleCommandRequest);
-  controlServer.on("/command", HTTP_OPTIONS, []()
+  controlServer.on("/stimulation/start", HTTP_POST, handleStimulationStartRequest);
+  controlServer.on("/stimulation/start", HTTP_OPTIONS, []()
+                   {
+                     if (!rejectControllerRequestInAccessPointMode())
+                       controlServer.send(204);
+                   });
+  controlServer.on("/stimulation/stop", HTTP_POST, handleStimulationStopRequest);
+  controlServer.on("/stimulation/stop", HTTP_OPTIONS, []()
                    {
                      if (!rejectControllerRequestInAccessPointMode())
                        controlServer.send(204);
@@ -799,10 +676,4 @@ void CommandService::update()
   {
     controlServer.handleClient();
   }
-}
-
-bool CommandService::submit(const CommandRequest &request)
-{
-  return ensureCommandExecutor() &&
-         xQueueOverwrite(commandQueue, &request) == pdPASS;
 }

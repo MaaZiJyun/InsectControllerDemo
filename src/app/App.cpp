@@ -10,9 +10,9 @@
 #include "../components/BoardComp.h"
 #include "../components/CameraComp.h"
 #include "../components/WifiComp.h"
-#include "../services/BehaviorService.h"
 #include "../services/CommandService.h"
 #include "../services/DiscoveryService.h"
+#include "../services/StimulationService.h"
 #include "../services/VideoService.h"
 
 #include <Arduino.h>
@@ -44,14 +44,14 @@ void App::begin(){
   Serial.setDebugOutput(false);
   Serial.println();
 
-  // 先将所有行为通道置于安全的 INPUT 高阻状态
+  // 先将所有刺激引脚置于安全的 INPUT 高阻状态
   BoardComp::enable();
 
   // 启动 Wi-Fi 连接或 SoftAP 回退
   WifiComp::enable();
 
   // SoftAP 只提供 Wi-Fi 配网；控制、摄像头和发现服务仅在 STA 模式启动。
-  BehaviorService::enable();
+  StimulationService::enable();
   CommandService::enable();
   startStationServices();
 }

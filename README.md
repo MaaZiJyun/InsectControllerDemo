@@ -6,7 +6,8 @@ Based on XIAO electronic board control
 When the board joins the same Wi-Fi network as Exp.-Recorder, it exposes:
 
 - `GET http://<board-ip>/config` for controller limits and defaults.
-- `POST http://<board-ip>/command?...` for stimulation commands.
+- `POST http://<board-ip>/stimulation/start` to start generic bipolar stimulation.
+- `POST http://<board-ip>/stimulation/stop` to stop stimulation safely.
 - `GET/POST http://<board-ip>/camera/settings` for camera configuration.
 - `GET http://<board-ip>:81/stream` for the MJPEG camera stream.
 - `GET http://<board-ip>/stream/stats` for completed-frame, JPEG-byte, capture-time, and send-time counters.
@@ -28,17 +29,22 @@ point shuts down. If joining fails, the access point remains available.
 While the fallback access point is active, controller/camera APIs return `403`,
 and the MJPEG and UDP discovery services are not started.
 
-Example command:
+Example request:
 
-```text
-POST http://<board-ip>/command?name=forward&chnl1=1&chnl2=2&chnl3=3&chnl4=4&durationMs=200&frequency=50
+```http
+POST http://<board-ip>/stimulation/start
+Content-Type: application/json
+
+{"pin1":1,"pin2":3,"frequencyHz":50,"durationMs":300}
 ```
 
-Valid command names are `forward`, `back`, `left`, `right`, and `stop`. Channel
-values are the XIAO labels `D0` through `D10` represented by indices `0` through
-`10`; all four values must be different. The control API permits CORS so that an
-HTTP-hosted browser client on the same LAN can call it directly.
+`pin1` and `pin2` are XIAO labels `D0` through `D10`, represented by indices
+`0` through `10`; they must be different. During the first phase, `pin1` is LOW
+and `pin2` is HIGH. The second phase reverses that polarity. Every other
+stimulation pin remains high impedance. Frequency must be `1` through `500` Hz,
+and duration must be `1` through `4294967295` ms.
 
-When waveform parameters are omitted, the default frequency is `50 Hz`.
-`forward` defaults to `200 ms`; `back`, `left`, and `right` default to `400 ms`.
-The default channel mapping is Chnl1–Chnl4 = D1–D4.
+The firmware stops automatically after `durationMs`. A new start request safely
+replaces the active stimulation. Send `POST /stimulation/stop` for immediate
+stop; all D0–D10 pins then return to input/high-impedance mode. The control API
+permits CORS so an HTTP-hosted browser client on the same LAN can call it.
