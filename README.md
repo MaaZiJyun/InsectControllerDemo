@@ -3,7 +3,8 @@ Based on XIAO electronic board control
 
 ## LAN API
 
-When the board joins the same Wi-Fi network as Exp.-Recorder, it exposes:
+The same API is available through either the board's own access point or an
+external Wi-Fi network:
 
 - `GET http://<board-ip>/config` for controller limits and defaults.
 - `POST http://<board-ip>/stimulation/start` to start generic bipolar stimulation.
@@ -12,22 +13,21 @@ When the board joins the same Wi-Fi network as Exp.-Recorder, it exposes:
 - `GET http://<board-ip>:81/stream` for the MJPEG camera stream.
 - `GET http://<board-ip>/stream/stats` for completed-frame, JPEG-byte, capture-time, and send-time counters.
 - `GET http://<board-ip>/camera/capture` for a maximum-resolution JPEG photo.
+- `GET/POST http://<board-ip>/wifi/settings` for Wi-Fi status and configuration.
+- `GET http://<board-ip>/wifi/networks` to scan nearby Wi-Fi networks.
 - The default live-video profile is `640x480 @ 30 FPS`;
   still photos continue to use the sensor's maximum supported resolution.
 - UDP port `37020` for the `EXP_RECORDER_DISCOVER_V1` discovery handshake.
 
-The page at `/` is a Wi-Fi provisioning page served only in access-point
-fallback mode. It contains no camera, stimulation, GPIO, or controller UI. In
-station mode, the controller UI is provided by Exp.-Recorder on the client
-device. See [Exp.-Recorder LAN integration](docs/EXP_RECORDER_API.md) for the
-complete API contract and frontend examples.
-
-In access-point fallback mode, open the onboard Wi-Fi setup page to scan for
-and join an existing network. A successful connection is saved
-for future boots; the response displays the board's new IP, then the XIAO access
-point shuts down. If joining fails, the access point remains available.
-While the fallback access point is active, controller/camera APIs return `403`,
-and the MJPEG and UDP discovery services are not started.
+There is no onboard configuration page at `/`; Exp.-Recorder supplies the UI.
+If the board cannot join a saved or built-in network, it creates the
+`XIAOESP32S3` access point (password: `xiaoesp32s3`). A client connected to that
+access point can use the complete stimulation, camera, video, discovery, and Wi-Fi APIs at
+`192.168.4.1`. Wi-Fi changes run asynchronously while those services continue
+working. After a successful external connection, the new credentials are saved
+and the access point closes after five seconds. On failure it remains active.
+See [Exp.-Recorder LAN integration](docs/EXP_RECORDER_API.md) for the complete
+API contract and frontend examples.
 
 Example request:
 

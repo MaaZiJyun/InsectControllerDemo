@@ -1,6 +1,6 @@
 /**
  * @file CommandService.cpp
- * @brief 单槽覆盖式命令队列和 Controller HTTP 服务实现。
+ * @brief Controller HTTP API 服务实现。
  */
 #include "CommandService.h"
 
@@ -10,7 +10,6 @@
 #include "../components/WifiComp.h"
 #include "../config/ControllerConfig.h"
 #include "../config/GpioConfig.h"
-#include "../web/ControllerPage.h"
 
 #include <Arduino.h>
 #include <WebServer.h>
@@ -23,28 +22,56 @@ namespace
 WebServer controlServer(ControllerConfig::CONTROL_PORT);
 bool serverEnabled = false;
 
-bool rejectControllerRequestInAccessPointMode()
+bool extractJsonString(const String &json, const char *name, String &value)
 {
-  if (!WifiComp::isAccessPointMode())
-  {
+  const String marker = String('"') + name + '"';
+  const int keyAt = json.indexOf(marker);
+  if (keyAt < 0 || json.indexOf(marker, keyAt + marker.length()) >= 0)
     return false;
+
+  int cursor = keyAt + marker.length();
+  while (cursor < json.length() && isspace(static_cast<unsigned char>(json[cursor])))
+    ++cursor;
+  if (cursor >= json.length() || json[cursor++] != ':')
+    return false;
+  while (cursor < json.length() && isspace(static_cast<unsigned char>(json[cursor])))
+    ++cursor;
+  if (cursor >= json.length() || json[cursor++] != '"')
+    return false;
+
+  value = "";
+  while (cursor < json.length())
+  {
+    const char character = json[cursor++];
+    if (character == '"')
+      return true;
+    if (character != '\\')
+    {
+      if (static_cast<uint8_t>(character) < 0x20)
+        return false;
+      value += character;
+      continue;
+    }
+    if (cursor >= json.length())
+      return false;
+    switch (json[cursor++])
+    {
+    case '"': value += '"'; break;
+    case '\\': value += '\\'; break;
+    case '/': value += '/'; break;
+    case 'b': value += '\b'; break;
+    case 'f': value += '\f'; break;
+    case 'n': value += '\n'; break;
+    case 'r': value += '\r'; break;
+    case 't': value += '\t'; break;
+    default: return false;
+    }
   }
-  controlServer.send(403,
-                     "application/json",
-                     "{\"ok\":false,\"error\":\"only Wi-Fi setup is available in access-point mode\"}");
-  return true;
+  return false;
 }
 
 void handleWifiNetworksRequest()
 {
-  if (!WifiComp::isAccessPointMode())
-  {
-    controlServer.send(403,
-                       "application/json",
-                       "{\"ok\":false,\"error\":\"Wi-Fi setup is only available in access-point mode\"}");
-    return;
-  }
-
   String response;
   response.reserve(1024);
   if (!WifiComp::scanNetworks(response))
@@ -59,27 +86,29 @@ void handleWifiNetworksRequest()
   controlServer.send(200, "application/json", response);
 }
 
-void handleWifiConnectRequest()
+void sendWifiSettings()
 {
-  if (!WifiComp::isAccessPointMode())
-  {
-    controlServer.send(403,
-                       "application/json",
-                       "{\"ok\":false,\"error\":\"Wi-Fi setup is only available in access-point mode\"}");
-    return;
-  }
-  if (!controlServer.hasArg("ssid"))
-  {
-    controlServer.send(400,
-                       "application/json",
-                       "{\"ok\":false,\"error\":\"ssid is required\"}");
-    return;
-  }
+  String response;
+  response.reserve(384);
+  WifiComp::statusJson(response);
+  controlServer.sendHeader("Cache-Control", "no-store");
+  controlServer.send(200, "application/json", response);
+}
 
-  const String ssid = controlServer.arg("ssid");
-  const String password = controlServer.hasArg("password")
-                              ? controlServer.arg("password")
-                              : String();
+void handleWifiSettingsRequest()
+{
+  String json = controlServer.arg("plain");
+  json.trim();
+  String ssid;
+  String password;
+  if (json.length() < 2 || json[0] != '{' || json[json.length() - 1] != '}' ||
+      !extractJsonString(json, "ssid", ssid) ||
+      !extractJsonString(json, "password", password))
+  {
+    controlServer.send(400, "application/json",
+                       "{\"ok\":false,\"error\":\"ssid and password are required JSON strings\"}");
+    return;
+  }
   if (ssid.isEmpty() || ssid.length() > 32 || password.length() > 63)
   {
     controlServer.send(400,
@@ -88,31 +117,21 @@ void handleWifiConnectRequest()
     return;
   }
 
-  IPAddress stationAddress;
-  if (!WifiComp::connectToExternalWifi(ssid, password, stationAddress))
+  if (!WifiComp::requestExternalWifi(ssid, password))
   {
-    controlServer.send(504,
+    controlServer.send(409,
                        "application/json",
-                       "{\"ok\":false,\"error\":\"unable to join Wi-Fi; access point remains active\"}");
+                       "{\"ok\":false,\"error\":\"a Wi-Fi connection attempt is already running\"}");
     return;
   }
 
-  String response = "{\"ok\":true,\"ip\":\"";
-  response += stationAddress.toString();
-  response += "\",\"controlUrl\":\"http://";
-  response += stationAddress.toString();
-  response += "/\",\"message\":\"joined; access point will close\"}";
   controlServer.sendHeader("Cache-Control", "no-store");
-  controlServer.send(200, "application/json", response);
+  controlServer.send(202, "application/json",
+                     "{\"ok\":true,\"connectionState\":\"connecting\"}");
 }
 
 void handleStreamStatsRequest()
 {
-  if (rejectControllerRequestInAccessPointMode())
-  {
-    return;
-  }
-
   const VideoService::StreamStats stats = VideoService::stats();
   const uint64_t averageFrameBytes = stats.framesSent == 0
                                          ? 0
@@ -173,11 +192,6 @@ bool parseBooleanSetting(const char *name, bool &value)
 
 void sendCameraSettings()
 {
-  if (rejectControllerRequestInAccessPointMode())
-  {
-    return;
-  }
-
   CameraComp::Settings settings = {};
   if (!CameraComp::getSettings(settings))
   {
@@ -253,11 +267,6 @@ void sendCameraSettings()
 
 void handleCameraSettingsRequest()
 {
-  if (rejectControllerRequestInAccessPointMode())
-  {
-    return;
-  }
-
   CameraComp::Settings settings = {};
   if (!CameraComp::getSettings(settings))
   {
@@ -368,11 +377,6 @@ void handleCameraSettingsRequest()
 
 void handleCameraCaptureRequest()
 {
-  if (rejectControllerRequestInAccessPointMode())
-  {
-    return;
-  }
-
   if (!CameraComp::isEnabled())
   {
     controlServer.send(503, "application/json", "{\"ok\":false,\"error\":\"camera unavailable\"}");
@@ -508,9 +512,6 @@ bool parseFrequency(const String &input, float &value)
 
 void handleStimulationStartRequest()
 {
-  if (rejectControllerRequestInAccessPointMode())
-    return;
-
   String json = controlServer.arg("plain");
   json.trim();
   String pin1Input;
@@ -570,9 +571,6 @@ void handleStimulationStartRequest()
 
 void handleStimulationStopRequest()
 {
-  if (rejectControllerRequestInAccessPointMode())
-    return;
-
   if (!StimulationService::stopStimulation())
   {
     controlServer.send(503, "application/json",
@@ -591,24 +589,8 @@ bool CommandService::enable()
     return true;
   }
 
-  controlServer.on("/", HTTP_GET, []()
-                   {
-                     if (!WifiComp::isAccessPointMode())
-                     {
-                       controlServer.send(404,
-                                          "application/json",
-                                          "{\"ok\":false,\"error\":\"Wi-Fi setup page is only available in access-point mode\"}");
-                       return;
-                     }
-                     controlServer.sendHeader("Cache-Control", "no-store");
-                     controlServer.send_P(200, "text/html; charset=utf-8", ControllerPage::HTML);
-                   });
   controlServer.on("/config", HTTP_GET, []()
                    {
-                     if (rejectControllerRequestInAccessPointMode())
-                     {
-                       return;
-                     }
                      char response[384];
                      snprintf(response,
                               sizeof(response),
@@ -625,40 +607,26 @@ bool CommandService::enable()
                    });
   controlServer.on("/stimulation/start", HTTP_POST, handleStimulationStartRequest);
   controlServer.on("/stimulation/start", HTTP_OPTIONS, []()
-                   {
-                     if (!rejectControllerRequestInAccessPointMode())
-                       controlServer.send(204);
-                   });
+                   { controlServer.send(204); });
   controlServer.on("/stimulation/stop", HTTP_POST, handleStimulationStopRequest);
   controlServer.on("/stimulation/stop", HTTP_OPTIONS, []()
-                   {
-                     if (!rejectControllerRequestInAccessPointMode())
-                       controlServer.send(204);
-                   });
+                   { controlServer.send(204); });
   controlServer.on("/camera/settings", HTTP_GET, sendCameraSettings);
   controlServer.on("/camera/settings", HTTP_POST, handleCameraSettingsRequest);
   controlServer.on("/camera/settings", HTTP_OPTIONS, []()
-                   {
-                     if (!rejectControllerRequestInAccessPointMode())
-                       controlServer.send(204);
-                   });
+                   { controlServer.send(204); });
   controlServer.on("/camera/capture", HTTP_GET, handleCameraCaptureRequest);
   controlServer.on("/camera/capture", HTTP_OPTIONS, []()
-                   {
-                     if (!rejectControllerRequestInAccessPointMode())
-                       controlServer.send(204);
-                   });
+                   { controlServer.send(204); });
   controlServer.on("/stream/stats", HTTP_GET, handleStreamStatsRequest);
   controlServer.on("/stream/stats", HTTP_OPTIONS, []()
-                   {
-                     if (!rejectControllerRequestInAccessPointMode())
-                       controlServer.send(204);
-                   });
+                   { controlServer.send(204); });
   controlServer.on("/wifi/networks", HTTP_GET, handleWifiNetworksRequest);
   controlServer.on("/wifi/networks", HTTP_OPTIONS, []()
                    { controlServer.send(204); });
-  controlServer.on("/wifi/connect", HTTP_POST, handleWifiConnectRequest);
-  controlServer.on("/wifi/connect", HTTP_OPTIONS, []()
+  controlServer.on("/wifi/settings", HTTP_GET, sendWifiSettings);
+  controlServer.on("/wifi/settings", HTTP_POST, handleWifiSettingsRequest);
+  controlServer.on("/wifi/settings", HTTP_OPTIONS, []()
                    { controlServer.send(204); });
   controlServer.onNotFound([]()
                            { controlServer.send(404, "application/json", "{\"ok\":false,\"error\":\"not found\"}"); });

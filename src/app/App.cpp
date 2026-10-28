@@ -3,7 +3,7 @@
  * @brief 固件启动序列与 Arduino 主循环调度实现。
  *
  * 初始化顺序体现硬件安全依赖：先建立安全电极状态，再启动网络。
- * SoftAP 阶段仅提供配网；加入外部网络后才启动摄像头和控制服务。
+ * SoftAP 和外部 Wi-Fi 模式下都启动完整控制、摄像头和发现服务。
  */
 #include "App.h"
 
@@ -16,24 +16,6 @@
 #include "../services/VideoService.h"
 
 #include <Arduino.h>
-
-namespace
-{
-bool stationServicesStarted = false;
-
-void startStationServices()
-{
-  if (stationServicesStarted || WifiComp::isAccessPointMode())
-  {
-    return;
-  }
-
-  CameraComp::enable();
-  VideoService::enable();
-  DiscoveryService::enable();
-  stationServicesStarted = true;
-}
-} // namespace
 
 // 主 Setup 函数
 /** @brief 按安全依赖顺序初始化所有设备与网络子系统。 */
@@ -50,10 +32,12 @@ void App::begin(){
   // 启动 Wi-Fi 连接或 SoftAP 回退
   WifiComp::enable();
 
-  // SoftAP 只提供 Wi-Fi 配网；控制、摄像头和发现服务仅在 STA 模式启动。
+  // SoftAP 本身就是可完整工作的局域网，因此所有服务立即启动。
   StimulationService::enable();
   CommandService::enable();
-  startStationServices();
+  CameraComp::enable();
+  VideoService::enable();
+  DiscoveryService::enable();
 }
 
 // 主循环
@@ -61,7 +45,6 @@ void App::begin(){
 void App::update()
 {
   WifiComp::update();
-  startStationServices();
   CommandService::update();
   DiscoveryService::update();
 

@@ -1,29 +1,22 @@
 /**
- * @file wificomp.h
- * @brief Wi-Fi 连接与 SoftAP 回退组件。
+ * @file WifiComp.h
+ * @brief Wi-Fi STA/SoftAP 管理与非阻塞配网。
  */
 #pragma once
 
 #include <Arduino.h>
-#include <IPAddress.h>
 
 namespace WifiComp
 {
+void enable();
+bool isAccessPointMode();
+bool scanNetworks(String &json);
 
-    /** @brief 优先连接外部网络，失败时启动设备 SoftAP。 */
-    void enable();
+/** @brief 提交新 STA 凭据；连接由 update() 非阻塞推进。 */
+bool requestExternalWifi(const String &ssid, const String &password);
 
-    /** @brief 当前是否运行在板子自建热点的回退模式。 */
-    bool isAccessPointMode();
+/** @brief 生成不包含密码的 Wi-Fi 状态 JSON。 */
+void statusJson(String &json);
 
-    /** @brief 在热点保持在线时扫描附近 Wi-Fi，并返回 JSON 数组。 */
-    bool scanNetworks(String &json);
-
-    /** @brief 从热点模式加入外部 Wi-Fi；成功时保存凭据并延迟关闭热点。 */
-    bool connectToExternalWifi(const String &ssid,
-                               const String &password,
-                               IPAddress &stationAddress);
-
-    /** @brief 处理成功联网后的延迟热点关闭。 */
-    void update();
-}
+void update();
+} // namespace WifiComp

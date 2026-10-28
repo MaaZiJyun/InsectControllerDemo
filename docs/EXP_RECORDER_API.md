@@ -2,16 +2,18 @@
 
 ## Runtime modes
 
-The firmware has two distinct UI/network modes:
+The firmware has two network modes with the same capabilities:
 
 1. **Station mode**: the XIAO joins the same external Wi-Fi LAN as the device
    running Exp.-Recorder. Exp.-Recorder supplies the controller UI and calls the
-   board's HTTP API. The board does not serve its onboard controller at `/`.
+   board's HTTP API.
 2. **Access-point fallback mode**: if joining the configured external Wi-Fi times
-   out, the XIAO creates its own access point. In this mode only, opening `/`
-   serves the controller page compiled into the firmware.
+   out, the XIAO creates `XIAOESP32S3` (password `xiaoesp32s3`) at
+   `192.168.4.1`.
 
-The control API and camera endpoints remain available in both modes.
+The complete stimulation, camera, MJPEG, discovery, and Wi-Fi APIs remain
+available in both modes. The firmware serves no HTML frontend at `/`;
+Exp.-Recorder always supplies the UI.
 
 ## Discovering the board
 
@@ -72,14 +74,11 @@ Example response:
 `networkMode` is `station` on a shared external LAN and `access-point` when the
 board created its fallback Wi-Fi network.
 
-## Onboard Wi-Fi setup
+## Wi-Fi API
 
-These endpoints are available only while the board is running its fallback
-access point and are used by the dedicated onboard Wi-Fi provisioning page.
-That page contains no controller, GPIO, stimulation, or camera functionality.
-While provisioning is active, `/config`, `/stimulation/*`, and `/camera/*` return
-`403`; port `81` streaming and UDP discovery are not started. Those services
-start only after the board joins an existing Wi-Fi network.
+When the board's own access point is active, clients can keep using all normal
+controller functions while changing the external Wi-Fi configuration. There is
+no dedicated onboard setup page.
 
 Scan nearby networks:
 
@@ -98,21 +97,53 @@ Example response:
 }
 ```
 
-Join a network using an `application/x-www-form-urlencoded` POST body. Keep the
-password out of the query string:
+Read current connection state:
 
-```text
-POST http://192.168.4.1/wifi/connect
-Content-Type: application/x-www-form-urlencoded
-
-ssid=Lab+Wi-Fi&password=example-password
+```http
+GET http://192.168.4.1/wifi/settings
 ```
 
-On success the response contains `ip` and `controlUrl`. The credentials are
-saved, and the fallback access point closes about 2.5 seconds after the response
-is sent. The client must join the same Wi-Fi and use UDP discovery or the
-returned IP. If association fails, the endpoint returns `504` and the access
-point remains active. Open networks may use an empty password.
+Example response while the board is trying to join an external network:
+
+```json
+{
+  "ok": true,
+  "connectionState": "connecting",
+  "accessPoint": {
+    "active": true,
+    "ssid": "XIAOESP32S3",
+    "ip": "192.168.4.1"
+  },
+  "station": {
+    "connected": false,
+    "ssid": "Lab Wi-Fi",
+    "ip": "0.0.0.0"
+  },
+  "error": null
+}
+```
+
+Connection states are `idle`, `connecting`, `connected`, and `failed`.
+
+Submit new credentials as JSON:
+
+```http
+POST http://192.168.4.1/wifi/settings
+Content-Type: application/json
+
+{
+  "ssid": "Lab Wi-Fi",
+  "password": "example-password"
+}
+```
+
+The POST returns `202 Accepted` immediately. Poll `GET /wifi/settings` without
+blocking stimulation or camera control. When `connectionState` becomes
+`connected`, `station.ip` contains the new LAN address. The credentials are
+saved and the board's access point closes five seconds later. If the connection
+fails after ten seconds, `connectionState` becomes `failed`, `error` describes
+the failure, and the access point remains available. Open networks use an empty
+password string.
 
 ## Starting stimulation
 
