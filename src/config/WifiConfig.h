@@ -6,11 +6,16 @@
  */
 #pragma once
 
+#include <stdint.h>
+
 namespace WifiConfig
 {
 
     static constexpr long WIFI_CONNECT_TIMEOUT_MS = 10000;
     static constexpr unsigned long AP_SHUTDOWN_DELAY_MS = 5000;
+    static constexpr uint8_t DEFAULT_AP_CHANNEL = 6;
+    static constexpr uint8_t MIN_AP_CHANNEL = 1;
+    static constexpr uint8_t MAX_AP_CHANNEL = 13;
 
     static constexpr char AP_SSID[] = "XIAOESP32S3";      /// 网络名称。
     static constexpr char AP_PASSWORD[] = "xiaoesp32s3";  /// 访问密码。

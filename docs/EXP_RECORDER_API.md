@@ -145,6 +145,49 @@ fails after ten seconds, `connectionState` becomes `failed`, `error` describes
 the failure, and the access point remains available. Open networks use an empty
 password string.
 
+### Access-point radio settings
+
+ESP32-S3 only supports the 2.4 GHz Wi-Fi band; it cannot create a 5 GHz access
+point. The configurable radio setting is the 2.4 GHz channel.
+
+Read the configured and actual channels:
+
+```http
+GET http://192.168.4.1/wifi/access-point
+```
+
+```json
+{
+  "ok": true,
+  "supportedBands": ["2.4GHz"],
+  "band": "2.4GHz",
+  "channel": 6,
+  "actualChannel": 6,
+  "minChannel": 1,
+  "maxChannel": 13,
+  "restartPending": false,
+  "stationOverridesChannel": false
+}
+```
+
+Change and persist the channel:
+
+```http
+POST http://192.168.4.1/wifi/access-point
+Content-Type: application/json
+
+{
+  "channel": 11
+}
+```
+
+The POST returns `202 Accepted`. If SoftAP is active it restarts immediately
+after the response, so clients may need to reconnect to `XIAOESP32S3`. In
+simultaneous STA+SoftAP mode both interfaces share one radio: an external
+router's channel takes priority. In that case `channel` remains the persisted
+preference, `actualChannel` reports the channel currently in use, and
+`stationOverridesChannel` is `true` when they differ.
+
 ## Starting stimulation
 
 ```http

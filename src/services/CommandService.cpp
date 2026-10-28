@@ -8,8 +8,10 @@
 #include "VideoService.h"
 #include "../components/CameraComp.h"
 #include "../components/WifiComp.h"
+#include "../config/ApiConfig.h"
 #include "../config/ControllerConfig.h"
 #include "../config/GpioConfig.h"
+#include "../config/WifiConfig.h"
 
 #include <Arduino.h>
 #include <WebServer.h>
@@ -19,7 +21,7 @@
 
 namespace
 {
-WebServer controlServer(ControllerConfig::CONTROL_PORT);
+WebServer controlServer(ApiConfig::CONTROL_PORT);
 bool serverEnabled = false;
 
 bool extractJsonString(const String &json, const char *name, String &value)
@@ -510,6 +512,48 @@ bool parseFrequency(const String &input, float &value)
   return true;
 }
 
+void sendAccessPointSettings()
+{
+  String response;
+  response.reserve(256);
+  WifiComp::accessPointSettingsJson(response);
+  controlServer.sendHeader("Cache-Control", "no-store");
+  controlServer.send(200, "application/json", response);
+}
+
+void handleAccessPointSettingsRequest()
+{
+  String json = controlServer.arg("plain");
+  json.trim();
+  String channelInput;
+  uint32_t channel = 0;
+  if (json.length() < 2 || json[0] != '{' || json[json.length() - 1] != '}' ||
+      !extractJsonNumber(json, "channel", channelInput) ||
+      !parseUnsigned(channelInput, WifiConfig::MAX_AP_CHANNEL, channel) ||
+      channel < WifiConfig::MIN_AP_CHANNEL)
+  {
+    char response[112] = {};
+    snprintf(response,
+             sizeof(response),
+             "{\"ok\":false,\"error\":\"channel must be an integer from %u through %u\"}",
+             WifiConfig::MIN_AP_CHANNEL,
+             WifiConfig::MAX_AP_CHANNEL);
+    controlServer.send(400, "application/json", response);
+    return;
+  }
+
+  if (!WifiComp::requestAccessPointChannel(static_cast<uint8_t>(channel)))
+  {
+    controlServer.send(409, "application/json",
+                       "{\"ok\":false,\"error\":\"Wi-Fi configuration is busy\"}");
+    return;
+  }
+
+  controlServer.sendHeader("Cache-Control", "no-store");
+  controlServer.send(202, "application/json",
+                     "{\"ok\":true,\"restartPending\":true}");
+}
+
 void handleStimulationStartRequest()
 {
   String json = controlServer.arg("plain");
@@ -589,15 +633,17 @@ bool CommandService::enable()
     return true;
   }
 
-  controlServer.on("/config", HTTP_GET, []()
+  controlServer.on(ApiConfig::CONFIG_PATH, HTTP_GET, []()
                    {
                      char response[384];
                      snprintf(response,
                               sizeof(response),
-                              "{\"model\":\"XIAO ESP32S3 Sense\",\"networkMode\":\"%s\",\"controlPort\":%u,\"videoPort\":%u,\"stimulation\":{\"startPath\":\"/stimulation/start\",\"stopPath\":\"/stimulation/stop\",\"supportedPins\":[0,1,2,3,4,5,6,7,8,9,10],\"minDurationMs\":%lu,\"maxDurationMs\":%lu,\"minFrequencyHz\":%.1f,\"maxFrequencyHz\":%.1f}}",
+                              "{\"model\":\"XIAO ESP32S3 Sense\",\"networkMode\":\"%s\",\"controlPort\":%u,\"videoPort\":%u,\"stimulation\":{\"startPath\":\"%s\",\"stopPath\":\"%s\",\"supportedPins\":[0,1,2,3,4,5,6,7,8,9,10],\"minDurationMs\":%lu,\"maxDurationMs\":%lu,\"minFrequencyHz\":%.1f,\"maxFrequencyHz\":%.1f}}",
                               WifiComp::isAccessPointMode() ? "access-point" : "station",
-                              ControllerConfig::CONTROL_PORT,
-                              ControllerConfig::VIDEO_PORT,
+                              ApiConfig::CONTROL_PORT,
+                              ApiConfig::VIDEO_PORT,
+                              ApiConfig::STIMULATION_START_PATH,
+                              ApiConfig::STIMULATION_STOP_PATH,
                               static_cast<unsigned long>(ControllerConfig::MIN_DURATION_MS),
                               static_cast<unsigned long>(ControllerConfig::MAX_DURATION_MS),
                               ControllerConfig::MIN_FREQUENCY_HZ,
@@ -605,28 +651,32 @@ bool CommandService::enable()
                      controlServer.sendHeader("Cache-Control", "no-store");
                      controlServer.send(200, "application/json", response);
                    });
-  controlServer.on("/stimulation/start", HTTP_POST, handleStimulationStartRequest);
-  controlServer.on("/stimulation/start", HTTP_OPTIONS, []()
+  controlServer.on(ApiConfig::STIMULATION_START_PATH, HTTP_POST, handleStimulationStartRequest);
+  controlServer.on(ApiConfig::STIMULATION_START_PATH, HTTP_OPTIONS, []()
                    { controlServer.send(204); });
-  controlServer.on("/stimulation/stop", HTTP_POST, handleStimulationStopRequest);
-  controlServer.on("/stimulation/stop", HTTP_OPTIONS, []()
+  controlServer.on(ApiConfig::STIMULATION_STOP_PATH, HTTP_POST, handleStimulationStopRequest);
+  controlServer.on(ApiConfig::STIMULATION_STOP_PATH, HTTP_OPTIONS, []()
                    { controlServer.send(204); });
-  controlServer.on("/camera/settings", HTTP_GET, sendCameraSettings);
-  controlServer.on("/camera/settings", HTTP_POST, handleCameraSettingsRequest);
-  controlServer.on("/camera/settings", HTTP_OPTIONS, []()
+  controlServer.on(ApiConfig::CAMERA_SETTINGS_PATH, HTTP_GET, sendCameraSettings);
+  controlServer.on(ApiConfig::CAMERA_SETTINGS_PATH, HTTP_POST, handleCameraSettingsRequest);
+  controlServer.on(ApiConfig::CAMERA_SETTINGS_PATH, HTTP_OPTIONS, []()
                    { controlServer.send(204); });
-  controlServer.on("/camera/capture", HTTP_GET, handleCameraCaptureRequest);
-  controlServer.on("/camera/capture", HTTP_OPTIONS, []()
+  controlServer.on(ApiConfig::CAMERA_CAPTURE_PATH, HTTP_GET, handleCameraCaptureRequest);
+  controlServer.on(ApiConfig::CAMERA_CAPTURE_PATH, HTTP_OPTIONS, []()
                    { controlServer.send(204); });
-  controlServer.on("/stream/stats", HTTP_GET, handleStreamStatsRequest);
-  controlServer.on("/stream/stats", HTTP_OPTIONS, []()
+  controlServer.on(ApiConfig::STREAM_STATS_PATH, HTTP_GET, handleStreamStatsRequest);
+  controlServer.on(ApiConfig::STREAM_STATS_PATH, HTTP_OPTIONS, []()
                    { controlServer.send(204); });
-  controlServer.on("/wifi/networks", HTTP_GET, handleWifiNetworksRequest);
-  controlServer.on("/wifi/networks", HTTP_OPTIONS, []()
+  controlServer.on(ApiConfig::WIFI_NETWORKS_PATH, HTTP_GET, handleWifiNetworksRequest);
+  controlServer.on(ApiConfig::WIFI_NETWORKS_PATH, HTTP_OPTIONS, []()
                    { controlServer.send(204); });
-  controlServer.on("/wifi/settings", HTTP_GET, sendWifiSettings);
-  controlServer.on("/wifi/settings", HTTP_POST, handleWifiSettingsRequest);
-  controlServer.on("/wifi/settings", HTTP_OPTIONS, []()
+  controlServer.on(ApiConfig::WIFI_SETTINGS_PATH, HTTP_GET, sendWifiSettings);
+  controlServer.on(ApiConfig::WIFI_SETTINGS_PATH, HTTP_POST, handleWifiSettingsRequest);
+  controlServer.on(ApiConfig::WIFI_SETTINGS_PATH, HTTP_OPTIONS, []()
+                   { controlServer.send(204); });
+  controlServer.on(ApiConfig::WIFI_ACCESS_POINT_PATH, HTTP_GET, sendAccessPointSettings);
+  controlServer.on(ApiConfig::WIFI_ACCESS_POINT_PATH, HTTP_POST, handleAccessPointSettingsRequest);
+  controlServer.on(ApiConfig::WIFI_ACCESS_POINT_PATH, HTTP_OPTIONS, []()
                    { controlServer.send(204); });
   controlServer.onNotFound([]()
                            { controlServer.send(404, "application/json", "{\"ok\":false,\"error\":\"not found\"}"); });
@@ -634,7 +684,7 @@ bool CommandService::enable()
   controlServer.begin();
   serverEnabled = true;
 
-  Serial.printf("HTTP service started on port %u\n", ControllerConfig::CONTROL_PORT);
+  Serial.printf("HTTP service started on port %u\n", ApiConfig::CONTROL_PORT);
   return true;
 }
 

@@ -4,7 +4,7 @@
  */
 #include "DiscoveryService.h"
 
-#include "../config/ControllerConfig.h"
+#include "../config/ApiConfig.h"
 
 #include <Arduino.h>
 #include <WiFi.h>
@@ -16,9 +16,6 @@ namespace
 {
 WiFiUDP discoveryUdp;
 bool discoveryEnabled = false;
-
-constexpr char DISCOVERY_REQUEST[] = "EXP_RECORDER_DISCOVER_V1";
-constexpr char DISCOVERY_PROTOCOL[] = "EXP_RECORDER_BOARD_V1";
 
 void formatStationMac(char output[18])
 {
@@ -38,16 +35,16 @@ bool DiscoveryService::enable()
     return true;
   }
 
-  discoveryEnabled = discoveryUdp.begin(ControllerConfig::DISCOVERY_PORT) == 1;
+  discoveryEnabled = discoveryUdp.begin(ApiConfig::DISCOVERY_PORT) == 1;
   if (!discoveryEnabled)
   {
     Serial.printf("Failed to start discovery service on UDP port %u\n",
-                  ControllerConfig::DISCOVERY_PORT);
+                  ApiConfig::DISCOVERY_PORT);
     return false;
   }
 
   Serial.printf("Discovery service started on UDP port %u\n",
-                ControllerConfig::DISCOVERY_PORT);
+                ApiConfig::DISCOVERY_PORT);
   return true;
 }
 
@@ -67,7 +64,7 @@ void DiscoveryService::update()
   char request[64] = {};
   const int bytesRead = discoveryUdp.read(
       reinterpret_cast<uint8_t *>(request), sizeof(request) - 1);
-  if (bytesRead <= 0 || strcmp(request, DISCOVERY_REQUEST) != 0)
+  if (bytesRead <= 0 || strcmp(request, ApiConfig::DISCOVERY_REQUEST) != 0)
   {
     return;
   }
@@ -79,10 +76,10 @@ void DiscoveryService::update()
   snprintf(response,
            sizeof(response),
            "{\"protocol\":\"%s\",\"mac\":\"%s\",\"model\":\"XIAO ESP32S3 Sense\",\"control_port\":%u,\"video_port\":%u}",
-           DISCOVERY_PROTOCOL,
+           ApiConfig::DISCOVERY_PROTOCOL,
            mac,
-           ControllerConfig::CONTROL_PORT,
-           ControllerConfig::VIDEO_PORT);
+           ApiConfig::CONTROL_PORT,
+           ApiConfig::VIDEO_PORT);
 
   discoveryUdp.beginPacket(discoveryUdp.remoteIP(), discoveryUdp.remotePort());
   discoveryUdp.write(reinterpret_cast<const uint8_t *>(response), strlen(response));

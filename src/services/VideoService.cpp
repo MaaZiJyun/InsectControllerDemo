@@ -5,7 +5,7 @@
 #include "VideoService.h"
 
 #include "../components/CameraComp.h"
-#include "../config/ControllerConfig.h"
+#include "../config/ApiConfig.h"
 
 #include <Arduino.h>
 #include <WiFi.h>
@@ -338,7 +338,7 @@ bool VideoService::enable()
   }
 
   httpd_config_t config = HTTPD_DEFAULT_CONFIG();
-  config.server_port = ControllerConfig::VIDEO_PORT;
+  config.server_port = ApiConfig::VIDEO_PORT;
   config.max_open_sockets = 4;
   config.lru_purge_enable = true;
   config.stack_size = 8192;
@@ -359,7 +359,7 @@ bool VideoService::enable()
   }
 
   const httpd_uri_t streamUri = {
-      .uri = "/stream",
+      .uri = ApiConfig::VIDEO_STREAM_PATH,
       .method = HTTP_GET,
       .handler = streamHandler,
       .user_ctx = nullptr};
@@ -374,7 +374,7 @@ bool VideoService::enable()
   }
 
   ++streamGeneration;
-  Serial.printf("Video stream started on port %u\n", ControllerConfig::VIDEO_PORT);
+  Serial.printf("Video stream started on port %u\n", ApiConfig::VIDEO_PORT);
   return true;
 }
 

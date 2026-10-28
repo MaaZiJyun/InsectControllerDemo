@@ -28,10 +28,14 @@ String pendingPassword;
 String connectionError;
 uint32_t connectionStartedAt = 0;
 bool connectionAttemptStarted = false;
+uint8_t accessPointChannel = WifiConfig::DEFAULT_AP_CHANNEL;
+uint8_t pendingAccessPointChannel = WifiConfig::DEFAULT_AP_CHANNEL;
+bool accessPointChannelChangePending = false;
 
 constexpr char PREFERENCES_NAMESPACE[] = "wifi-config";
 constexpr char SSID_KEY[] = "ssid";
 constexpr char PASSWORD_KEY[] = "password";
+constexpr char AP_CHANNEL_KEY[] = "ap-channel";
 
 void appendJsonString(String &output, const String &value)
 {
@@ -138,6 +142,28 @@ bool saveCredentials(const String &ssid, const String &password)
     return saved;
 }
 
+void loadAccessPointChannel()
+{
+    Preferences preferences;
+    if (!preferences.begin(PREFERENCES_NAMESPACE, true))
+        return;
+    const uint8_t saved = preferences.getUChar(AP_CHANNEL_KEY,
+                                               WifiConfig::DEFAULT_AP_CHANNEL);
+    preferences.end();
+    if (saved >= WifiConfig::MIN_AP_CHANNEL && saved <= WifiConfig::MAX_AP_CHANNEL)
+        accessPointChannel = saved;
+}
+
+bool saveAccessPointChannel(uint8_t channel)
+{
+    Preferences preferences;
+    if (!preferences.begin(PREFERENCES_NAMESPACE, false))
+        return false;
+    const bool saved = preferences.putUChar(AP_CHANNEL_KEY, channel) == sizeof(uint8_t);
+    preferences.end();
+    return saved;
+}
+
 bool startAccessPoint(bool disconnectStation)
 {
     if (accessPointActive)
@@ -154,7 +180,9 @@ bool startAccessPoint(bool disconnectStation)
         WiFi.mode(WIFI_AP_STA);
     }
 
-    if (!WiFi.softAP(WifiConfig::AP_SSID, WifiConfig::AP_PASSWORD))
+    if (!WiFi.softAP(WifiConfig::AP_SSID,
+                     WifiConfig::AP_PASSWORD,
+                     accessPointChannel))
     {
         Serial.println("Failed to start the access point");
         return false;
@@ -162,8 +190,9 @@ bool startAccessPoint(bool disconnectStation)
 
     accessPointActive = true;
     WiFi.setSleep(false);
-    Serial.printf("Access point ready: http://%s/\n",
-                  WiFi.softAPIP().toString().c_str());
+    Serial.printf("Access point ready: http://%s/ channel=%u\n",
+                  WiFi.softAPIP().toString().c_str(),
+                  static_cast<unsigned int>(WiFi.channel()));
     return true;
 }
 
@@ -214,6 +243,8 @@ void failRequestedConnection()
 
 void WifiComp::enable()
 {
+    loadAccessPointChannel();
+
     String savedSsid;
     String savedPassword;
     const bool hasSavedCredentials = loadSavedCredentials(savedSsid, savedPassword);
@@ -290,7 +321,8 @@ bool WifiComp::scanNetworks(String &json)
 bool WifiComp::requestExternalWifi(const String &ssid, const String &password)
 {
     if (ssid.isEmpty() || ssid.length() > 32 || password.length() > 63 ||
-        connectionState == ConnectionState::Connecting)
+        connectionState == ConnectionState::Connecting ||
+        accessPointChannelChangePending)
     {
         return false;
     }
@@ -328,8 +360,61 @@ void WifiComp::statusJson(String &json)
     json += '}';
 }
 
+void WifiComp::accessPointSettingsJson(String &json)
+{
+    const bool stationConnected = WiFi.status() == WL_CONNECTED;
+    const uint8_t actualChannel = (accessPointActive || stationConnected)
+                                      ? WiFi.channel()
+                                      : accessPointChannel;
+    json = "{\"ok\":true,\"supportedBands\":[\"2.4GHz\"],"
+           "\"band\":\"2.4GHz\",\"channel\":";
+    json += static_cast<unsigned int>(accessPointChannel);
+    json += ",\"actualChannel\":";
+    json += static_cast<unsigned int>(actualChannel);
+    json += ",\"minChannel\":";
+    json += static_cast<unsigned int>(WifiConfig::MIN_AP_CHANNEL);
+    json += ",\"maxChannel\":";
+    json += static_cast<unsigned int>(WifiConfig::MAX_AP_CHANNEL);
+    json += ",\"restartPending\":";
+    json += accessPointChannelChangePending ? "true" : "false";
+    json += ",\"stationOverridesChannel\":";
+    json += stationConnected && actualChannel != accessPointChannel ? "true" : "false";
+    json += '}';
+}
+
+bool WifiComp::requestAccessPointChannel(uint8_t channel)
+{
+    if (channel < WifiConfig::MIN_AP_CHANNEL ||
+        channel > WifiConfig::MAX_AP_CHANNEL ||
+        connectionState == ConnectionState::Connecting ||
+        accessPointChannelChangePending)
+    {
+        return false;
+    }
+
+    pendingAccessPointChannel = channel;
+    accessPointChannelChangePending = true;
+    return true;
+}
+
 void WifiComp::update()
 {
+    if (accessPointChannelChangePending)
+    {
+        accessPointChannel = pendingAccessPointChannel;
+        if (!saveAccessPointChannel(accessPointChannel))
+            Serial.println("Warning: failed to persist access-point channel");
+
+        accessPointChannelChangePending = false;
+        if (accessPointActive)
+        {
+            WiFi.softAPdisconnect(false);
+            accessPointActive = false;
+            if (!startAccessPoint(false))
+                Serial.println("Failed to restart access point with new channel");
+        }
+    }
+
     if (connectionState == ConnectionState::Connecting)
     {
         if (!connectionAttemptStarted)
