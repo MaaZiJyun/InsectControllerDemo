@@ -1,6 +1,11 @@
 # InsectControllerDemo
 Based on XIAO electronic board control
 
+## Documentation
+
+- [Embedded software design](docs/EMBEDDED_SOFTWARE_DESIGN.md)
+- [Exp.-Recorder LAN integration](docs/EXP_RECORDER_API.md)
+
 ## LAN API
 
 The same API is available through either the board's own access point or an
